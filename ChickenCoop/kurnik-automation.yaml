@@ -431,10 +431,11 @@ sensor:
             id(light_on_minute_display).publish_state(minute);
 
 
+
   - platform: adc
     id: a1_adc_tempSensor_pin
     name: "A1 ADC Temperature Sensor Pin"
-    pin: GPIO34
+    pin: GPIO36
     attenuation: 12db
     update_interval: 60s
   
@@ -442,7 +443,7 @@ sensor:
     id: a1_resistance
     sensor: a1_adc_tempSensor_pin
     configuration: DOWNSTREAM   # NTC je směrem k GND
-    resistor: 20kOhm
+    resistor: 17.72kOhm
   
   - platform: ntc
     id: a1_temperature
@@ -451,9 +452,28 @@ sensor:
     # Pokud znáš přesné parametry, použij "beta" nebo 3-bodovou kalibraci.
     # Příklad s beta (nahradit přesnými hodnotami z datasheetu):
     calibration:
-      b_constant: 4263
-      reference_temperature: 25°C
-      reference_resistance: 20kOhm
+     - 20000.0 -> 25°C
+     - 70200.0 -> 0°C
+     - 220060.0 -> -20°C
+
+
+    # calibration:
+    #     - temperature: -20°C
+    #       resistance: 220060 Ω
+    #     - temperature: 0°C
+    #       resistance: 70200 Ω
+    #     - temperature: 10°C
+    #       resistance: 41560 Ω
+    #     - temperature: 25°C
+    #       resistance: 20000 Ω
+    #     - temperature: 50°C
+    #       resistance: 5494 Ω
+    #     - temperature: 80°C
+    #       resistance: 1113.8 Ω
+
+      # b_constant: 3950
+      # reference_temperature: 25°C
+      # reference_resistance: 20kOhm
 
     # For case you want to use 3-point calibration instead, uncomment and set values below:
     # calibration:
