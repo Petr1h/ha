@@ -153,14 +153,16 @@ time:
 # ------------------------------------------------------------------------------
 binary_sensor:
   - platform: gpio
-    name: "KC868-A6-IN-1"
+    name: "door_end_stop_top"
+    id: door_end_stop_top
     pin:
       pcf8574: inputs
       number: 0
       mode: INPUT
       inverted: true
   - platform: gpio
-    name: "KC868-A6-IN-2"
+    name: "door_end_stop_bottom"
+    id: door_end_stop_bottom
     pin:
       pcf8574: inputs
       number: 1
@@ -200,13 +202,13 @@ output:
     id: chicken_light_pin
     pin:
       pcf8574: outputs
-      number: 2
+      number: 3
       mode: OUTPUT
       inverted: true
 
 switch:
   - platform: gpio
-    id: chicken_door_direction_pin
+    id: chicken_door_direction_pin_1
     pin:
       pcf8574: outputs
       number: 0
@@ -215,10 +217,20 @@ switch:
     restore_mode: ALWAYS_OFF
 
   - platform: gpio
-    id: chicken_door_power_pin
+    id: chicken_door_direction_pin_2
+
     pin:
       pcf8574: outputs
       number: 1
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: chicken_door_power_pin
+    pin:
+      pcf8574: outputs
+      number: 2
       mode: OUTPUT
       inverted: true
     restore_mode: ALWAYS_OFF
@@ -243,10 +255,12 @@ script:
           condition:
             lambda: 'return open_direction;'
           then:
-            - switch.turn_on: chicken_door_direction_pin    # ON = Otevřít
+            - switch.turn_on: chicken_door_direction_pin_1  # ON + ON = Open direction
+            - switch.turn_on: chicken_door_direction_pin_2
           else:
-            - switch.turn_off: chicken_door_direction_pin   # OFF = Zavřít
-            - delay: !lambda 'return id(direction_switch_delay_ms);'
+            - switch.turn_off: chicken_door_direction_pin_1 # OFF + OFF = Close direction
+            - switch.turn_off: chicken_door_direction_pin_2
+      - delay: !lambda 'return id(direction_switch_delay_ms);'
 
 
 # --- Cover (šoupací/stahovací dveře) ---
@@ -254,8 +268,18 @@ cover:
   - platform: template
     name: "Chicken_door"
     id: chicken_door
-    optimistic: true        # set to optimistic mode since we don't have position feedback
-    has_position: false     # without encoder/limit switches just open/close/stop
+    optimistic: false       # rely on end-stop feedback
+    has_position: true      # derive position from end stops
+    device_class: garage
+    lambda: |-
+      // Report open if top end-stop is active, closed if bottom is active, else keep last state
+      if (id(door_end_stop_top).state) {
+        return 1.0f;
+      }
+      if (id(door_end_stop_bottom).state) {
+        return 0.0f;
+      }
+      return {};
 
     open_action:
       # Set direction to OPEN, with safe power off and delay before switching
@@ -264,13 +288,18 @@ cover:
           open_direction: true
       # Turn on power
       - switch.turn_on: chicken_door_power_pin
-      # (Optionally) turn off motor after expected run time if you don't have limit switches
-      - delay: !lambda 'return id(expected_run_time_ms);'
+      - wait_until:
+          condition:
+            binary_sensor.is_on: door_end_stop_top
+          timeout: 10s
+      - lambda: |-
+          if (!id(door_end_stop_top).state) {
+            ESP_LOGW("main", "Open action timed out; stopping motor.");
+          }
+      # Turn off power and direction pins after reaching end stop or timeout
       - switch.turn_off: chicken_door_power_pin
-      # Set direction to neutral/safe state
-      - script.execute:
-          id: set_direction_safely
-          open_direction: false
+      - switch.turn_off: chicken_door_direction_pin_1
+      - switch.turn_off: chicken_door_direction_pin_2
 
     close_action:
       # Set direction to CLOSE, with safe power off and delay before switching
@@ -279,12 +308,23 @@ cover:
           open_direction: false
       # Turn on power
       - switch.turn_on: chicken_door_power_pin
-      # (Optionally) turn off motor after expected run time if you don't have limit switches
-      - delay: !lambda 'return id(expected_run_time_ms);'
+      - wait_until:
+          condition:
+            binary_sensor.is_on: door_end_stop_bottom
+          timeout: 10s
+      - lambda: |-
+          if (!id(door_end_stop_bottom).state) {
+            ESP_LOGW("main", "Close action timed out; stopping motor.");
+          }
+      # Turn off power and direction pins after reaching end stop or timeout
       - switch.turn_off: chicken_door_power_pin
+      - switch.turn_off: chicken_door_direction_pin_1
+      - switch.turn_off: chicken_door_direction_pin_2
 
     stop_action:
       - switch.turn_off: chicken_door_power_pin
+      - switch.turn_off: chicken_door_direction_pin_1
+      - switch.turn_off: chicken_door_direction_pin_2
 
         
 light:
