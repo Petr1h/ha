@@ -303,12 +303,24 @@ sensor:
   # DHT sensor for temperature and humidity inside the coop
   - platform: dht
     pin: 32
+    model: DHT22
     temperature:
       name: "Temperature Inside"
       id: TempInside
     humidity:
       name: "Humidity Inside"
       id: HumInside
+    update_interval: 60s
+
+  - platform: dht
+    pin: 33
+    model: DHT22
+    temperature:
+      name: "Temperature Outside"
+      id: TempOutside
+    humidity:
+      name: "Humidity Outside"
+      id: HumOutside
     update_interval: 60s
 
   # Home Assistant input_datetime sensor to get door close time
@@ -370,9 +382,9 @@ sensor:
             id(chicken_light_on_time_hour_night) = hour;
             id(chicken_light_on_time_minutes_night) = minute;
             ESP_LOGI("main", "Updated light on time: %02d:%02d", hour, minute);
-            id(light_on_hour_display).publish_state(hour);
-            id(light_on_minute_display).publish_state(minute);
-  
+            id(light_on_hour_night_display).publish_state(hour);
+            id(light_on_minute_night_display).publish_state(minute);
+
   # Home Assistant input_datetime sensor to get light off night time
   - platform: homeassistant
     entity_id: input_datetime.coop_light_off_night
@@ -389,8 +401,8 @@ sensor:
             id(chicken_light_off_time_hour_night) = hour;
             id(chicken_light_off_time_minutes_night) = minute;
             ESP_LOGI("main", "Updated light off time: %02d:%02d", hour, minute);
-            id(light_off_hour_display).publish_state(hour);  
-            id(light_off_minute_display).publish_state(minute);
+            id(light_off_hour_night_display).publish_state(hour);  
+            id(light_off_minute_night_display).publish_state(minute);
 
 # Home Assistant input_datetime sensor to get light off morning time
   - platform: homeassistant
@@ -408,8 +420,8 @@ sensor:
             id(chicken_light_off_time_hour_morning) = hour;
             id(chicken_light_off_time_minutes_morning) = minute;
             ESP_LOGI("main", "Updated light off time: %02d:%02d", hour, minute);
-            id(light_off_hour_display).publish_state(hour);  
-            id(light_off_minute_display).publish_state(minute);
+            id(light_off_hour_morning_display).publish_state(hour);  
+            id(light_off_minute_morning_display).publish_state(minute);
 
 # Home Assistant input_datetime sensor to get light on morning time
   - platform: homeassistant
@@ -427,67 +439,15 @@ sensor:
             id(chicken_light_on_time_hour_morning) = hour;
             id(chicken_light_on_time_minutes_morning) = minute;
             ESP_LOGI("main", "Updated light on time: %02d:%02d", hour, minute);
-            id(light_on_hour_display).publish_state(hour);  
-            id(light_on_minute_display).publish_state(minute);
-
-
-
-  - platform: adc
-    id: a1_adc_tempSensor_pin
-    name: "A1 ADC Temperature Sensor Pin"
-    pin: GPIO36
-    attenuation: 12db
-    update_interval: 60s
-  
-  - platform: resistance
-    id: a1_resistance
-    sensor: a1_adc_tempSensor_pin
-    configuration: DOWNSTREAM   # NTC je směrem k GND
-    resistor: 17.72kOhm
-  
-  - platform: ntc
-    id: a1_temperature
-    name: "Teplota A1 (NTC 20k)"
-    sensor: a1_resistance
-    # Pokud znáš přesné parametry, použij "beta" nebo 3-bodovou kalibraci.
-    # Příklad s beta (nahradit přesnými hodnotami z datasheetu):
-    calibration:
-     - 20000.0 -> 25°C
-     - 70200.0 -> 0°C
-     - 220060.0 -> -20°C
-
-
-    # calibration:
-    #     - temperature: -20°C
-    #       resistance: 220060 Ω
-    #     - temperature: 0°C
-    #       resistance: 70200 Ω
-    #     - temperature: 10°C
-    #       resistance: 41560 Ω
-    #     - temperature: 25°C
-    #       resistance: 20000 Ω
-    #     - temperature: 50°C
-    #       resistance: 5494 Ω
-    #     - temperature: 80°C
-    #       resistance: 1113.8 Ω
-
-      # b_constant: 3950
-      # reference_temperature: 25°C
-      # reference_resistance: 20kOhm
-
-    # For case you want to use 3-point calibration instead, uncomment and set values below:
-    # calibration:
-    #  - 0.0 -> 100°C
-    #  - 20.0kΩ -> 25°C
-    #  - 30.0kΩ -> 0°C
-
+            id(light_on_hour_morning_display).publish_state(hour);  
+            id(light_on_minute_morning_display).publish_state(minute);
 
 
 
 # ------------------------------------------------------------------------------
 # Template sensors to display current settings
 # ------------------------------------------------------------------------------
-
+  # Template sensors for door times
   - platform: template
     name: "Door Open Hour"
     id: door_open_hour_display
@@ -515,35 +475,32 @@ sensor:
     lambda: |-
       return id(door_close_minutes);
     update_interval: never
-
+  # Template sensors for night light times
   - platform: template
     name: "Light Off Hour"
-    id: light_off_hour_display
+    id: light_off_hour_night_display
     lambda: |-
       return id(chicken_light_off_time_hour_night);
     update_interval: never
-  
   - platform: template
     name: "Light On Hour"
-    id: light_on_hour_display
+    id: light_on_hour_night_display
     lambda: |-
       return id(chicken_light_on_time_hour_night);
     update_interval: never
-
   - platform: template
     name: "Light Off Minute"
-    id: light_off_minute_display
+    id: light_off_minute_night_display
     lambda: |-
       return id(chicken_light_off_time_minutes_night);
     update_interval: never
-
   - platform: template
     name: "Light On Minute"
-    id: light_on_minute_display
+    id: light_on_minute_night_display
     lambda: |-
       return id(chicken_light_on_time_minutes_night);
     update_interval: never
-
+  # Template sensors for morning light times
   - platform: template
     name: "Light Off Hour Morning"
     id: light_off_hour_morning_display
@@ -627,6 +584,3 @@ interval:
             id(chicken_light).turn_off().perform();
             ESP_LOGI("main", "Turning OFF chicken light at %02d:%02d", now.hour, now.minute);
           }
-
-
-
