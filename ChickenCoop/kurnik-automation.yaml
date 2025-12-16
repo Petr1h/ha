@@ -118,11 +118,13 @@ globals:
     restore_value: no
     initial_value: '400'
   
-# door running time in milliseconds for optimistic cover settings
-  - id: expected_run_time_ms
+# time to fill up water tank
+  - id: water_fill_time_seconds
     type: int
     restore_value: no
-    initial_value: '5000' 
+    initial_value: '60'
+
+
   
 
 
@@ -206,6 +208,7 @@ output:
       mode: OUTPUT
       inverted: true
 
+
 switch:
   - platform: gpio
     id: chicken_door_direction_pin_1
@@ -235,6 +238,25 @@ switch:
       inverted: true
     restore_mode: ALWAYS_OFF
 
+  - platform: gpio
+    id: water_valve_pin
+    name: "Water valve"
+    pin:
+      pcf8574: outputs
+      number: 4
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: water_heater_pin
+    name: "Water heater"
+    pin:
+      pcf8574: outputs
+      number: 5
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
 
 # ------------------------------------------------------------------------------
 # Scripts
@@ -333,6 +355,7 @@ light:
     name: "Chicken light"
     output: chicken_light_pin
     restore_mode: ALWAYS_OFF
+
 
 
 # ------------------------------------------------------------------------------
@@ -623,4 +646,15 @@ interval:
           if (now.hour == id(chicken_light_off_time_hour_morning) && now.minute == id(chicken_light_off_time_minutes_morning)) {
             id(chicken_light).turn_off().perform();
             ESP_LOGI("main", "Turning OFF chicken light at %02d:%02d", now.hour, now.minute);
+          }
+
+# Water valve control - open every day at 7am for specified duration
+      - lambda: |-
+          auto now = id(rtc_time).now();
+          if (now.hour == 7 && now.minute == 0) {
+            ESP_LOGI("main", "Starting water fill for %d seconds", id(water_fill_time_seconds));
+            id(water_valve_pin).turn_on();
+            delay(id(water_fill_time_seconds) * 1000);
+            id(water_valve_pin).turn_off();
+            ESP_LOGI("main", "Water fill completed");
           }
