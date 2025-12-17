@@ -124,6 +124,20 @@ globals:
     restore_value: no
     initial_value: '60'
 
+# water heater control variables
+  - id: water_heater_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: water_heater_start_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  - id: water_heater_block_until
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
 
   
 
@@ -657,4 +671,31 @@ interval:
             delay(id(water_fill_time_seconds) * 1000);
             id(water_valve_pin).turn_off();
             ESP_LOGI("main", "Water fill completed");
+          }
+
+# Water heater control - turn on when temp below 1°C for 1 hour, then block for 30 min
+      - lambda: |-
+          unsigned long current_millis = millis();
+          float temp = id(TempOutside).state;
+          
+          // Check if heater is currently running
+          if (id(water_heater_running)) {
+            // Check if 1 hour has passed (3600000 ms)
+            if (current_millis - id(water_heater_start_time) >= 3600000) {
+              id(water_heater_pin).turn_off();
+              id(water_heater_running) = false;
+              id(water_heater_block_until) = current_millis + 1800000; // Block for 30 min
+              ESP_LOGI("main", "Water heater turned OFF after 1 hour, blocked for 30 minutes");
+            }
+          } else {
+            // Check if we're in blocking period
+            if (current_millis < id(water_heater_block_until)) {
+              // Still in blocking period, do nothing
+            } else if (temp < 1.0 && !isnan(temp)) {
+              // Temperature below 1°C and not in blocking period
+              id(water_heater_pin).turn_on();
+              id(water_heater_running) = true;
+              id(water_heater_start_time) = current_millis;
+              ESP_LOGI("main", "Water heater turned ON (temp: %.1f°C)", temp);
+            }
           }
