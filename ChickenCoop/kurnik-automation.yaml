@@ -25,8 +25,8 @@ ota:
     password: !secret ota_password
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: !secret wifi_garden_ssid
+  password: !secret wifi_garden_password
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
@@ -91,10 +91,10 @@ globals:
 # time to turn on the light night
   - id: chicken_light_on_time_hour_night
     type: int
-    initial_value: '16'
+    initial_value: '15'
   - id: chicken_light_on_time_minutes_night
     type: int
-    initial_value: '10'
+    initial_value: '55'
 
 # time to turn off the light morning
   - id: chicken_light_off_time_hour_morning
@@ -102,7 +102,7 @@ globals:
     initial_value: '7'
   - id: chicken_light_off_time_minutes_morning
     type: int
-    initial_value: '15'
+    initial_value: '40'
 
 # time to turn on the light morning
   - id: chicken_light_on_time_hour_morning
@@ -110,13 +110,13 @@ globals:
     initial_value: '6'
   - id: chicken_light_on_time_minutes_morning
     type: int
-    initial_value: '10'
+    initial_value: '45'
 
 # time to wait between direction changes of the door
   - id: direction_switch_delay_ms
     type: int
     restore_value: no
-    initial_value: '400'
+    initial_value: '500'
   
 # time to fill up water tank
   - id: water_fill_time_seconds
@@ -327,7 +327,7 @@ cover:
       - wait_until:
           condition:
             binary_sensor.is_on: door_end_stop_top
-          timeout: 10s
+          timeout: 6s
       - lambda: |-
           if (!id(door_end_stop_top).state) {
             ESP_LOGW("main", "Open action timed out; stopping motor.");
@@ -347,7 +347,7 @@ cover:
       - wait_until:
           condition:
             binary_sensor.is_on: door_end_stop_bottom
-          timeout: 10s
+          timeout: 6s
       - lambda: |-
           if (!id(door_end_stop_bottom).state) {
             ESP_LOGW("main", "Close action timed out; stopping motor.");
@@ -519,6 +519,20 @@ sensor:
             id(light_on_hour_morning_display).publish_state(hour);  
             id(light_on_minute_morning_display).publish_state(minute);
 
+  # Home Assistant input_boolean sensor for door automation control
+  - platform: homeassistant
+    entity_id: input_boolean.enable_door_automation
+    internal: true
+    id: enable_door_automation_sensor
+    name: "Enable Door Automation"
+
+  # Home Assistant input_boolean sensor for water heater automation control
+  - platform: homeassistant
+    entity_id: input_boolean.enable_water_heater_automation
+    internal: true
+    id: enable_water_heater_automation_sensor
+    name: "Enable Water Heater Automation"
+
 
 
 # ------------------------------------------------------------------------------
@@ -627,17 +641,20 @@ interval:
     then:
       - lambda: |-
           auto now = id(rtc_time).now();
-          if (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes)) {
-            auto call = id(chicken_door).make_call();
-            call.set_command_open();
-            call.perform();
-            ESP_LOGI("main", "Opening chicken door at %02d:%02d", now.hour, now.minute);
-          }
-          if (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes)) {
-            auto call = id(chicken_door).make_call();
-            call.set_command_close();
-            call.perform();
-            ESP_LOGI("main", "Closing chicken door at %02d:%02d", now.hour, now.minute);
+          // Check if door automation is enabled
+          if (id(enable_door_automation_sensor).state) {
+            if (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes)) {
+              auto call = id(chicken_door).make_call();
+              call.set_command_open();
+              call.perform();
+              ESP_LOGI("main", "Opening chicken door at %02d:%02d", now.hour, now.minute);
+            }
+            if (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes)) {
+              auto call = id(chicken_door).make_call();
+              call.set_command_close();
+              call.perform();
+              ESP_LOGI("main", "Closing chicken door at %02d:%02d", now.hour, now.minute);
+            }
           }
 # Chicken Night light control based on time
       - lambda: |-
@@ -678,24 +695,32 @@ interval:
           unsigned long current_millis = millis();
           float temp = id(TempOutside).state;
           
-          // Check if heater is currently running
-          if (id(water_heater_running)) {
-            // Check if 1 hour has passed (3600000 ms)
-            if (current_millis - id(water_heater_start_time) >= 3600000) {
-              id(water_heater_pin).turn_off();
-              id(water_heater_running) = false;
-              id(water_heater_block_until) = current_millis + 1800000; // Block for 30 min
-              ESP_LOGI("main", "Water heater turned OFF after 1 hour, blocked for 30 minutes");
+          // Check if water heater automation is enabled
+          if (id(enable_water_heater_automation_sensor).state) {
+            // Check if heater is currently running
+            if (id(water_heater_running)) {
+              // Check if 1 hour has passed (3600000 ms)
+              if (current_millis - id(water_heater_start_time) >= 3600000) {
+                id(water_heater_pin).turn_off();
+                id(water_heater_running) = false;
+                id(water_heater_block_until) = current_millis + 1800000; // Block for 30 min
+                ESP_LOGI("main", "Water heater turned OFF after 1 hour, blocked for 30 minutes");
+              }
+            } else {
+              // Check if we're in blocking period
+              if (current_millis < id(water_heater_block_until)) {
+                // Still in blocking period, do nothing
+              } else if (temp < 1.0 && !isnan(temp)) {
+                // Temperature below 1°C and not in blocking period
+                id(water_heater_pin).turn_on();
+                id(water_heater_running) = true;
+                id(water_heater_start_time) = current_millis;
+                ESP_LOGI("main", "Water heater turned ON (temp: %.1f°C)", temp);
+              }
             }
-          } else {
-            // Check if we're in blocking period
-            if (current_millis < id(water_heater_block_until)) {
-              // Still in blocking period, do nothing
-            } else if (temp < 1.0 && !isnan(temp)) {
-              // Temperature below 1°C and not in blocking period
-              id(water_heater_pin).turn_on();
-              id(water_heater_running) = true;
-              id(water_heater_start_time) = current_millis;
-              ESP_LOGI("main", "Water heater turned ON (temp: %.1f°C)", temp);
-            }
+          } else if (id(water_heater_running)) {
+            // If automation is disabled but heater is running, turn it off
+            id(water_heater_pin).turn_off();
+            id(water_heater_running) = false;
+            ESP_LOGI("main", "Water heater automation disabled, turning OFF heater");
           }
