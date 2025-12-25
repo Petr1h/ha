@@ -124,6 +124,16 @@ globals:
     restore_value: no
     initial_value: '60'
 
+# time to open water valve
+  - id: water_fill_start_time_hour
+    type: int
+    restore_value: no
+    initial_value: '8'
+  - id: water_fill_start_time_minute
+    type: int
+    restore_value: no
+    initial_value: '0'
+
 # water heater control variables
   - id: water_heater_running
     type: bool
@@ -519,6 +529,35 @@ sensor:
             id(light_on_hour_morning_display).publish_state(hour);  
             id(light_on_minute_morning_display).publish_state(minute);
 
+# Home Assistant input_datetime sensor for water fill start time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_water_time
+    internal: true
+    id: water_fill_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(water_fill_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(water_fill_start_time_hour) = hour;
+            id(water_fill_start_time_minute) = minute;
+            ESP_LOGI("main", "Updated water fill start time: %02d:%02d", hour, minute);
+
+  # Home Assistant input_number sensor for water fill duration
+  - platform: homeassistant
+    entity_id: input_number.coop_water_duration
+    internal: true
+    id: water_fill_duration_sensor
+    on_value:
+      then:
+        - lambda: |-
+            float duration = id(water_fill_duration_sensor).state;
+            id(water_fill_time_seconds) = (int)duration;
+            ESP_LOGI("main", "Updated water fill duration: %d seconds", id(water_fill_time_seconds));
+
   # Home Assistant input_boolean sensor for door automation control
   - platform: homeassistant
     entity_id: input_boolean.enable_door_automation
@@ -568,25 +607,25 @@ sensor:
     update_interval: never
   # Template sensors for night light times
   - platform: template
-    name: "Light Off Hour"
+    name: "Light Off Hour Night"
     id: light_off_hour_night_display
     lambda: |-
       return id(chicken_light_off_time_hour_night);
     update_interval: never
   - platform: template
-    name: "Light On Hour"
+    name: "Light On Hour Night"
     id: light_on_hour_night_display
     lambda: |-
       return id(chicken_light_on_time_hour_night);
     update_interval: never
   - platform: template
-    name: "Light Off Minute"
+    name: "Light Off Minute Night"
     id: light_off_minute_night_display
     lambda: |-
       return id(chicken_light_off_time_minutes_night);
     update_interval: never
   - platform: template
-    name: "Light On Minute"
+    name: "Light On Minute Night"
     id: light_on_minute_night_display
     lambda: |-
       return id(chicken_light_on_time_minutes_night);
@@ -682,7 +721,7 @@ interval:
 # Water valve control - open every day at 7am for specified duration
       - lambda: |-
           auto now = id(rtc_time).now();
-          if (now.hour == 7 && now.minute == 0) {
+          if (now.hour == id(water_fill_start_time_hour) && now.minute == id(water_fill_start_time_minute)) {
             ESP_LOGI("main", "Starting water fill for %d seconds", id(water_fill_time_seconds));
             id(water_valve_pin).turn_on();
             delay(id(water_fill_time_seconds) * 1000);
