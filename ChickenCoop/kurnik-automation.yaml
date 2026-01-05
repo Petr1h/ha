@@ -718,16 +718,19 @@ interval:
             ESP_LOGI("main", "Turning OFF chicken light at %02d:%02d", now.hour, now.minute);
           }
 
-# Water valve control - open every day at 7am for specified duration
-      - lambda: |-
-          auto now = id(rtc_time).now();
-          if (now.hour == id(water_fill_start_time_hour) && now.minute == id(water_fill_start_time_minute)) {
-            ESP_LOGI("main", "Starting water fill for %d seconds", id(water_fill_time_seconds));
-            id(water_valve_pin).turn_on();
-            delay(id(water_fill_time_seconds) * 1000);
-            id(water_valve_pin).turn_off();
-            ESP_LOGI("main", "Water fill completed");
-          }
+# Water valve control - open valve at set time for set duration
+      - if:
+          condition:
+            - lambda: auto now = id(rtc_time).now();
+                      return now.hour == id(water_fill_start_time_hour) && now.minute == id(water_fill_start_time_minute);
+          then:
+            - logger.log:
+                format: "Starting water fill for %d seconds"
+                args: [ 'id(water_fill_time_seconds)' ]
+            - switch.turn_on: water_valve_pin
+            - delay: !lambda 'return id(water_fill_time_seconds) * 1000;'
+            - switch.turn_off: water_valve_pin
+            - logger.log: "Water fill completed"
 
 # Water heater control - turn on when temp below 1°C for 1 hour, then block for 30 min
       - lambda: |-
