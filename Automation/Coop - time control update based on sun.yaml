@@ -1,0 +1,77 @@
+alias: Kurník – denní přepočet časů podle slunce + řízení světel
+description: |
+  Nastaví helpery podle východu/západu slunce:
+  coop_door_open = sunrise + 20m 
+  coop_light_off_morning = sunrise + 35m 
+  coop_light_on_night = sunset - 20m 
+  coop_door_close = sunset + 20m 
+  A podle NOVĚ spočítaných časů zapne/vypne enable_light_automation.
+variables:
+  door_open_offset: 20
+  door_close_offset: 20
+  coop_light_off_morning_offset: 35
+  coop_light_on_night_offset: 20
+  sunrise_dt: "{{ as_local(as_datetime(state_attr('sun.sun', 'next_rising'))) }}"
+  sunset_dt: "{{ as_local(as_datetime(state_attr('sun.sun', 'next_setting'))) }}"
+  time_0630: "{{ today_at('06:30:00') }}"
+  time_1830: "{{ today_at('18:30:00') }}"
+
+triggers:
+  - at: "03:05:00"
+    trigger: time
+  - event: start
+    trigger: homeassistant
+  - trigger: template
+    value_template: >
+      {% set   door_open_offset = 20 %}
+      {% set sunrise = as_local(as_datetime(state_attr('sun.sun', 'next_rising'))) %}
+      {% set door_dt = today_at(states('input_datetime.coop_door_open')) %}
+
+      {% if sunrise and door_dt not in ['unknown', 'unavailable', 'none', ''] %}
+        {% set expected_door_ts = as_timestamp(sunrise) + door_open_offset * 60 %}
+        {% set door_ts = as_timestamp(door_dt) %}
+        {{ (expected_door_ts - door_ts) | abs > 300 }}
+      {% else %}
+        false
+      {% endif %}
+
+actions:
+  - target:
+      entity_id: input_datetime.coop_door_open
+    data:
+      time: "{{ (as_timestamp(sunrise_dt) + door_open_offset * 60) | timestamp_custom('%H:%M', true) }}"
+    action: input_datetime.set_datetime
+
+  - target:
+      entity_id: input_datetime.coop_light_off_morning
+    data:
+      time: "{{ (as_timestamp(sunrise_dt) + coop_light_off_morning_offset * 60) | timestamp_custom('%H:%M', true) }}"
+    action: input_datetime.set_datetime
+  - target:
+      entity_id: input_datetime.coop_light_on_night
+    data:
+      time: "{{ (as_timestamp(sunset_dt) - coop_light_on_night_offset * 60) | timestamp_custom('%H:%M', true) }}"
+    action: input_datetime.set_datetime
+  - target:
+      entity_id: input_datetime.coop_door_close
+    data:
+      time: "{{ (as_timestamp(sunset_dt) + door_close_offset * 60) | timestamp_custom('%H:%M', true) }}"
+    action: input_datetime.set_datetime
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ today_at(states('input_datetime.coop_light_off_morning')) < time_0630 and today_at(states('input_datetime.coop_light_on_night')) > time_1830 }}
+        sequence:
+          - target:
+              entity_id: input_boolean.enable_light_automation
+            action: input_boolean.turn_off
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ today_at(states('input_datetime.coop_light_off_morning')) > time_0630 and today_at(states('input_datetime.coop_light_on_night')) < time_1830 }}
+        sequence:
+          - target:
+              entity_id: input_boolean.enable_light_automation
+            action: input_boolean.turn_on
+mode: single
