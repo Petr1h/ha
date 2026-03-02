@@ -148,8 +148,7 @@ globals:
     restore_value: no
     initial_value: '0'
 
-
-  
+ 
 
 
 # ------------------------------------------------------------------------------
@@ -678,45 +677,63 @@ interval:
 # Chicken door control based on time
   - interval: 1min
     then:
-      - lambda: |-
-          auto now = id(rtc_time).now();
-          // Check if door automation is enabled
-          if (id(enable_door_automation_sensor).state) {
-            if (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes)) {
-              auto call = id(chicken_door).make_call();
-              call.set_command_open();
-              call.perform();
-              ESP_LOGI("main", "Opening chicken door at %02d:%02d", now.hour, now.minute);
-            }
-            if (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes)) {
-              auto call = id(chicken_door).make_call();
-              call.set_command_close();
-              call.perform();
-              ESP_LOGI("main", "Closing chicken door at %02d:%02d", now.hour, now.minute);
-            }
-          }
+      - if:
+        condition:
+          - lambda: 'return id(enable_door_automation_sensor).state;'
+        then:
+          - logger.log: "Door automation disabled, skipping door control.";
+          - if:
+            condition:
+              - lambda: |-
+                  auto now = id(rtc_time).now();
+                  return (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes));
+            then:
+              - logger.log: "Opening chicken door";
+              - cover.open: chicken_door
+          - if:
+            condition:
+              - lambda: |-
+                  auto now = id(rtc_time).now();
+                  return (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes));
+            then:
+              - logger.log: "Closing chicken door";
+              - cover.close: chicken_door
+
 # Chicken Night light control based on time
-      - lambda: |-
-          auto now = id(rtc_time).now();
-          if (now.hour == id(chicken_light_on_time_hour_night) && now.minute == id(chicken_light_on_time_minutes_night)) {
-            id(chicken_light).turn_on().perform();
-            ESP_LOGI("main", "Turning ON chicken light at %02d:%02d", now.hour, now.minute);
-          }
-          if (now.hour == id(chicken_light_off_time_hour_night) && now.minute == id(chicken_light_off_time_minutes_night)) {
-            id(chicken_light).turn_off().perform();
-            ESP_LOGI("main", "Turning OFF chicken light at %02d:%02d", now.hour, now.minute);
-          }
+      - if:
+        condition:
+          - lambda: |-
+              auto now = id(rtc_time).now();
+              return (now.hour == id(chicken_light_off_time_hour_night) && now.minute == id(chicken_light_off_time_minutes_night));
+        then:
+          - logger.log: "Turning OFF chicken light (night)";
+          - switch.turn_off: chicken_light_pin
+      - if:
+        condition:
+          - lambda: |-
+              auto now = id(rtc_time).now();
+              return (now.hour == id(chicken_light_on_time_hour_night) && now.minute == id(chicken_light_on_time_minutes_night));
+        then:
+          - logger.log: "Turning ON chicken light (night)";
+          - switch.turn_on: chicken_light_pin
+
 # Chicken Morning light control based on time
-      - lambda: |-
-          auto now = id(rtc_time).now();
-          if (now.hour == id(chicken_light_on_time_hour_morning) && now.minute == id(chicken_light_on_time_minutes_morning)) {
-            id(chicken_light).turn_on().perform();
-            ESP_LOGI("main", "Turning ON chicken light at %02d:%02d", now.hour, now.minute);
-          }
-          if (now.hour == id(chicken_light_off_time_hour_morning) && now.minute == id(chicken_light_off_time_minutes_morning)) {
-            id(chicken_light).turn_off().perform();
-            ESP_LOGI("main", "Turning OFF chicken light at %02d:%02d", now.hour, now.minute);
-          }
+      - if:
+        condition:
+          - lambda: |-
+              auto now = id(rtc_time).now();
+              return (now.hour == id(chicken_light_on_time_hour_morning) && now.minute == id(chicken_light_on_time_minutes_morning));
+        then:
+          - logger.log: "Turning ON chicken light (morning)";
+          - switch.turn_on: chicken_light_pin
+      - if:
+        condition:
+          - lambda: |-
+              auto now = id(rtc_time).now();
+              return (now.hour == id(chicken_light_off_time_hour_morning) && now.minute == id(chicken_light_off_time_minutes_morning));
+        then:
+          - logger.log: "Turning OFF chicken light (morning)";
+          - switch.turn_off: chicken_light_pin
 
 # Water valve control - open valve at set time for set duration
       - if:
