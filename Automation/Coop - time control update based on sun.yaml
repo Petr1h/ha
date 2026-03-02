@@ -12,7 +12,7 @@ variables:
   coop_light_off_morning_offset: 35
   coop_light_on_night_offset: 20
   sunrise_dt: "{{ as_local(as_datetime(state_attr('sun.sun', 'next_rising'))) }}"
-  sunset_dt: "{{ as_local(as_datetime(state_attr('sun.sun', 'next_setting'))) }}"
+  dusk_dt: "{{ as_local(as_datetime(state_attr('sun.sun', 'next_dusk'))) }}"
   time_0630: "{{ today_at('06:30:00') }}"
   time_1830: "{{ today_at('18:30:00') }}"
 
@@ -50,12 +50,12 @@ actions:
   - target:
       entity_id: input_datetime.coop_light_on_night
     data:
-      time: "{{ (as_timestamp(sunset_dt) - coop_light_on_night_offset * 60) | timestamp_custom('%H:%M', true) }}"
+      time: "{{ (as_timestamp(dusk_dt) - coop_light_on_night_offset * 60) | timestamp_custom('%H:%M', true) }}"
     action: input_datetime.set_datetime
   - target:
       entity_id: input_datetime.coop_door_close
     data:
-      time: "{{ (as_timestamp(sunset_dt) + door_close_offset * 60) | timestamp_custom('%H:%M', true) }}"
+      time: "{{ (as_timestamp(dusk_dt) + door_close_offset * 60) | timestamp_custom('%H:%M', true) }}"
     action: input_datetime.set_datetime
   - choose:
       - conditions:
