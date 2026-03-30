@@ -222,6 +222,42 @@ binary_sensor:
   #     mode: INPUT
   #     inverted: true
 
+  - platform: homeassistant
+    entity_id: input_boolean.enable_door_automation
+    internal: true
+    id: enable_door_automation_sensor
+    name: "Enable Door Automation"
+    on_state:
+      then:
+        - script.execute: sync_chicken_door_automation
+
+  - platform: homeassistant
+    entity_id: input_boolean.enable_water_heater_automation
+    internal: true
+    id: enable_water_heater_automation_sensor
+    name: "Enable Water Heater Automation"
+    on_state:
+      then:
+        - script.execute: sync_water_heater_automation
+
+  - platform: homeassistant
+    entity_id: input_boolean.enable_light_automation
+    internal: true
+    id: enable_light_automation_sensor
+    name: "Enable Light Automation"
+    on_state:
+      then:
+        - script.execute: sync_chicken_light_automation
+  
+  - platform: homeassistant
+    entity_id: input_boolean.enable_water_filling_automation
+    internal: true
+    id: enable_water_filling_automation_sensor
+    name: "Enable Water Filling Automation"
+    on_state:
+      then:
+        - script.execute: sync_water_valve_automation
+
 output:
   - platform: gpio
     id: chicken_light_pin
@@ -306,6 +342,125 @@ script:
             - switch.turn_off: chicken_door_direction_pin_1 # OFF + OFF = Close direction
             - switch.turn_off: chicken_door_direction_pin_2
       - delay: !lambda 'return id(direction_switch_delay_ms);'
+
+# Sync chicken light state based on current time and automation settings
+  - id: sync_chicken_light_automation
+    then:
+      - lambda: |-
+          auto now = id(rtc_time).now();
+          if (!now.is_valid()) {
+            ESP_LOGW("main", "Current time is not valid, skipping chicken light automation update.");
+            return;
+          }
+
+          if (!id(enable_light_automation_sensor).state) {
+            if (id(chicken_light).current_values.is_on()) {
+              id(chicken_light).turn_off().perform();
+              ESP_LOGI("main", "Chicken light automation disabled; turning light OFF.");
+            }
+            return;
+          }
+
+          const int current_minutes = now.hour * 60 + now.minute;
+          const int night_on_minutes = id(chicken_light_on_time_hour_night) * 60 + id(chicken_light_on_time_minutes_night);
+          const int night_off_minutes = id(chicken_light_off_time_hour_night) * 60 + id(chicken_light_off_time_minutes_night);
+          const int morning_on_minutes = id(chicken_light_on_time_hour_morning) * 60 + id(chicken_light_on_time_minutes_morning);
+          const int morning_off_minutes = id(chicken_light_off_time_hour_morning) * 60 + id(chicken_light_off_time_minutes_morning);
+
+          const bool night_window_active = current_minutes >= night_on_minutes && current_minutes < night_off_minutes;
+          const bool morning_window_active = current_minutes >= morning_on_minutes && current_minutes < morning_off_minutes;
+
+          if (night_window_active || morning_window_active) {
+            if (!id(chicken_light).current_values.is_on()) {
+              id(chicken_light).turn_on().perform();
+              ESP_LOGI("main", "Chicken light automation active; turning light ON.");
+            }
+          } else {
+            if (id(chicken_light).current_values.is_on()) {
+              id(chicken_light).turn_off().perform();
+              ESP_LOGI("main", "Chicken light automation active; turning light OFF.");
+            }
+          }
+
+# Sync chicken door state based on current time and automation settings
+  - id: sync_chicken_door_automation
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(enable_door_automation_sensor).state;'
+          then:
+            - if:
+                condition:
+                  - lambda: |-
+                      auto now = id(rtc_time).now();
+                      return (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes));
+                then:
+                  - logger.log: "Opening chicken door"
+                  - cover.open: chicken_door
+            - if:
+                condition:
+                  - lambda: |-
+                      auto now = id(rtc_time).now();
+                      return (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes));
+                then:
+                  - logger.log: "Closing chicken door"
+                  - cover.close: chicken_door
+          else:
+            - logger.log: "Door automation disabled, skipping door control."
+
+# Sync water valve state based on current time and configured duration
+  - id: sync_water_valve_automation
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(enable_water_filling_automation_sensor).state;'
+          then:
+            - if:
+                condition:
+                  - lambda: |-
+                      auto now = id(rtc_time).now();
+                      return now.hour == id(water_fill_start_time_hour) && now.minute == id(water_fill_start_time_minute);
+                then:
+                  - logger.log:
+                      format: "Starting water fill for %d seconds"
+                      args: [ 'id(water_fill_time_seconds)' ]
+                  - switch.turn_on: water_valve_pin
+                  - delay: !lambda 'return id(water_fill_time_seconds) * 1000;'
+                  - switch.turn_off: water_valve_pin
+                  - logger.log: "Water fill completed"
+          else:
+            - logger.log: "Water filling automation disabled, skipping water valve control."
+
+# Sync water heater state based on current temperature and automation settings
+  - id: sync_water_heater_automation
+    then:
+      - lambda: |-
+          unsigned long current_millis = millis();
+          float temp = id(TempOutside).state;
+
+          if (id(enable_water_heater_automation_sensor).state) {
+            if (id(water_heater_running)) {
+              if (current_millis - id(water_heater_start_time) >= 3600000) {
+                id(water_heater_pin).turn_off();
+                id(water_heater_running) = false;
+                id(water_heater_block_until) = current_millis + 1800000;
+                ESP_LOGI("main", "Water heater turned OFF after 1 hour, blocked for 30 minutes");
+              }
+            } else {
+              if (current_millis < id(water_heater_block_until)) {
+                // Still in blocking period, do nothing
+              } else if (temp < 1.0 && !isnan(temp)) {
+                id(water_heater_pin).turn_on();
+                id(water_heater_running) = true;
+                id(water_heater_start_time) = current_millis;
+                ESP_LOGI("main", "Water heater turned ON (temp: %.1f°C)", temp);
+              }
+            }
+          } else if (id(water_heater_running)) {
+            id(water_heater_pin).turn_off();
+            id(water_heater_running) = false;
+            ESP_LOGI("main", "Water heater automation disabled, turning OFF heater");
+          }
 
 
 # --- Cover (šoupací/stahovací dveře) ---
@@ -557,21 +712,6 @@ sensor:
             id(water_fill_time_seconds) = (int)duration;
             ESP_LOGI("main", "Updated water fill duration: %d seconds", id(water_fill_time_seconds));
 
-  # Home Assistant input_boolean sensor for door automation control
-  - platform: homeassistant
-    entity_id: input_boolean.enable_door_automation
-    internal: true
-    id: enable_door_automation_sensor
-    name: "Enable Door Automation"
-
-  # Home Assistant input_boolean sensor for water heater automation control
-  - platform: homeassistant
-    entity_id: input_boolean.enable_water_heater_automation
-    internal: true
-    id: enable_water_heater_automation_sensor
-    name: "Enable Water Heater Automation"
-
-
 
 # ------------------------------------------------------------------------------
 # Template sensors to display current settings
@@ -677,109 +817,13 @@ interval:
 # Chicken door control based on time
   - interval: 1min
     then:
-      - if:
-        condition:
-          - lambda: 'return id(enable_door_automation_sensor).state;'
-        then:
-          - logger.log: "Door automation disabled, skipping door control.";
-          - if:
-            condition:
-              - lambda: |-
-                  auto now = id(rtc_time).now();
-                  return (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes));
-            then:
-              - logger.log: "Opening chicken door";
-              - cover.open: chicken_door
-          - if:
-            condition:
-              - lambda: |-
-                  auto now = id(rtc_time).now();
-                  return (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes));
-            then:
-              - logger.log: "Closing chicken door";
-              - cover.close: chicken_door
+      - script.execute: sync_chicken_door_automation
 
 # Chicken Night light control based on time
-      - if:
-        condition:
-          - lambda: |-
-              auto now = id(rtc_time).now();
-              return (now.hour == id(chicken_light_off_time_hour_night) && now.minute == id(chicken_light_off_time_minutes_night));
-        then:
-          - logger.log: "Turning OFF chicken light (night)";
-          - switch.turn_off: chicken_light_pin
-      - if:
-        condition:
-          - lambda: |-
-              auto now = id(rtc_time).now();
-              return (now.hour == id(chicken_light_on_time_hour_night) && now.minute == id(chicken_light_on_time_minutes_night));
-        then:
-          - logger.log: "Turning ON chicken light (night)";
-          - switch.turn_on: chicken_light_pin
-
-# Chicken Morning light control based on time
-      - if:
-        condition:
-          - lambda: |-
-              auto now = id(rtc_time).now();
-              return (now.hour == id(chicken_light_on_time_hour_morning) && now.minute == id(chicken_light_on_time_minutes_morning));
-        then:
-          - logger.log: "Turning ON chicken light (morning)";
-          - switch.turn_on: chicken_light_pin
-      - if:
-        condition:
-          - lambda: |-
-              auto now = id(rtc_time).now();
-              return (now.hour == id(chicken_light_off_time_hour_morning) && now.minute == id(chicken_light_off_time_minutes_morning));
-        then:
-          - logger.log: "Turning OFF chicken light (morning)";
-          - switch.turn_off: chicken_light_pin
+      - script.execute: sync_chicken_light_automation
 
 # Water valve control - open valve at set time for set duration
-      - if:
-          condition:
-            - lambda: auto now = id(rtc_time).now();
-                      return now.hour == id(water_fill_start_time_hour) && now.minute == id(water_fill_start_time_minute);
-          then:
-            - logger.log:
-                format: "Starting water fill for %d seconds"
-                args: [ 'id(water_fill_time_seconds)' ]
-            - switch.turn_on: water_valve_pin
-            - delay: !lambda 'return id(water_fill_time_seconds) * 1000;'
-            - switch.turn_off: water_valve_pin
-            - logger.log: "Water fill completed"
+      - script.execute: sync_water_valve_automation
 
-# Water heater control - turn on when temp below 1°C for 1 hour, then block for 30 min
-      - lambda: |-
-          unsigned long current_millis = millis();
-          float temp = id(TempOutside).state;
-          
-          // Check if water heater automation is enabled
-          if (id(enable_water_heater_automation_sensor).state) {
-            // Check if heater is currently running
-            if (id(water_heater_running)) {
-              // Check if 1 hour has passed (3600000 ms)
-              if (current_millis - id(water_heater_start_time) >= 3600000) {
-                id(water_heater_pin).turn_off();
-                id(water_heater_running) = false;
-                id(water_heater_block_until) = current_millis + 1800000; // Block for 30 min
-                ESP_LOGI("main", "Water heater turned OFF after 1 hour, blocked for 30 minutes");
-              }
-            } else {
-              // Check if we're in blocking period
-              if (current_millis < id(water_heater_block_until)) {
-                // Still in blocking period, do nothing
-              } else if (temp < 1.0 && !isnan(temp)) {
-                // Temperature below 1°C and not in blocking period
-                id(water_heater_pin).turn_on();
-                id(water_heater_running) = true;
-                id(water_heater_start_time) = current_millis;
-                ESP_LOGI("main", "Water heater turned ON (temp: %.1f°C)", temp);
-              }
-            }
-          } else if (id(water_heater_running)) {
-            // If automation is disabled but heater is running, turn it off
-            id(water_heater_pin).turn_off();
-            id(water_heater_running) = false;
-            ESP_LOGI("main", "Water heater automation disabled, turning OFF heater");
-          }
+# Water heater control based on automation state and temperature
+      - script.execute: sync_water_heater_automation
