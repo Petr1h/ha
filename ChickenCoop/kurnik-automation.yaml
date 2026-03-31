@@ -1,0 +1,829 @@
+esphome:
+  name: kurnik-automation
+  friendly_name: Kurnik Automation
+  on_boot:
+    priority: -100  # Run after time and sun components are initialized
+    then:
+      - ds1307.read_time:
+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+# Enable Over The Air update
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_garden_ssid
+  password: !secret wifi_garden_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Kurnik-Automation"
+    password: !secret wifi_ap_password
+
+# Enable WEB portal for debuging
+web_server:
+captive_portal:
+mdns:
+
+# ------------------------------------------------------------------------------
+# Components definition
+# ------------------------------------------------------------------------------
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+  # cs pin: GPIO5
+
+i2c:
+  sda: GPIO4
+  scl:
+    number: GPIO15
+    ignore_strapping_warning: true
+
+pcf8574:
+  - id: inputs
+    address: 0x22
+  - id: outputs
+    address: 0x24
+
+
+# ------------------------------------------------------------------------------
+# Global variable to store time
+# ------------------------------------------------------------------------------
+globals:
+# time to close the chicken door
+  - id: door_close_hours
+    type: int
+    initial_value: '16'
+  - id: door_close_minutes
+    type: int
+    initial_value: '59'
+
+# time to open the chicken door
+  - id: door_open_hours
+    type: int
+    initial_value: '5'
+  - id: door_open_minutes
+    type: int
+    initial_value: '25'
+
+# time to turn off the light night
+  - id: chicken_light_off_time_hour_night
+    type: int
+    initial_value: '18'
+  - id: chicken_light_off_time_minutes_night
+    type: int
+    initial_value: '0'
+
+# time to turn on the light night
+  - id: chicken_light_on_time_hour_night
+    type: int
+    initial_value: '15'
+  - id: chicken_light_on_time_minutes_night
+    type: int
+    initial_value: '55'
+
+# time to turn off the light morning
+  - id: chicken_light_off_time_hour_morning
+    type: int
+    initial_value: '7'
+  - id: chicken_light_off_time_minutes_morning
+    type: int
+    initial_value: '40'
+
+# time to turn on the light morning
+  - id: chicken_light_on_time_hour_morning
+    type: int
+    initial_value: '6'
+  - id: chicken_light_on_time_minutes_morning
+    type: int
+    initial_value: '45'
+
+# time to wait between direction changes of the door
+  - id: direction_switch_delay_ms
+    type: int
+    restore_value: no
+    initial_value: '500'
+  
+# time to fill up water tank
+  - id: water_fill_time_seconds
+    type: int
+    restore_value: no
+    initial_value: '60'
+
+# time to open water valve
+  - id: water_fill_start_time_hour
+    type: int
+    restore_value: no
+    initial_value: '8'
+  - id: water_fill_start_time_minute
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+# water heater control variables
+  - id: water_heater_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: water_heater_start_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  - id: water_heater_block_until
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
+ 
+
+
+# ------------------------------------------------------------------------------
+# Time configuration
+# ------------------------------------------------------------------------------
+time:
+  - platform: ds1307
+    id: rtc_time
+    update_interval: never
+
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      then:
+        - ds1307.write_time:
+            id: rtc_time
+        - lambda: |-
+            auto rtc_now = id(rtc_time).now();
+            ESP_LOGI("main", "RTC time updated: %04d-%02d-%02d %02d:%02d:%02d",
+                     rtc_now.year, rtc_now.month, rtc_now.day_of_month,
+                     rtc_now.hour, rtc_now.minute, rtc_now.second);
+
+
+
+# ------------------------------------------------------------------------------
+# Input output definition
+# ------------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    name: "door_end_stop_top"
+    id: door_end_stop_top
+    pin:
+      pcf8574: inputs
+      number: 0
+      mode: INPUT
+      inverted: true
+  - platform: gpio
+    name: "door_end_stop_bottom"
+    id: door_end_stop_bottom
+    pin:
+      pcf8574: inputs
+      number: 1
+      mode: INPUT
+      inverted: true
+  # - platform: gpio
+  #   name: "KC868-A6-IN-3"
+  #   pin:
+  #     pcf8574: inputs
+  #     number: 2
+  #     mode: INPUT
+  #     inverted: true
+  # - platform: gpio
+  #   name: "KC868-A6-IN-4"
+  #   pin:
+  #     pcf8574: inputs
+  #     number: 3
+  #     mode: INPUT
+  #     inverted: true
+  # - platform: gpio
+  #   name: "KC868-A6-IN-5"
+  #   pin:
+  #     pcf8574: inputs
+  #     number: 4
+  #     mode: INPUT
+  #     inverted: true
+  # - platform: gpio
+  #   name: "KC868-A6-IN-6"
+  #   pin:
+  #     pcf8574: inputs
+  #     number: 5
+  #     mode: INPUT
+  #     inverted: true
+
+  - platform: homeassistant
+    entity_id: input_boolean.enable_door_automation
+    internal: true
+    id: enable_door_automation_sensor
+    name: "Enable Door Automation"
+    on_state:
+      then:
+        - script.execute: sync_chicken_door_automation
+
+  - platform: homeassistant
+    entity_id: input_boolean.enable_water_heater_automation
+    internal: true
+    id: enable_water_heater_automation_sensor
+    name: "Enable Water Heater Automation"
+    on_state:
+      then:
+        - script.execute: sync_water_heater_automation
+
+  - platform: homeassistant
+    entity_id: input_boolean.enable_light_automation
+    internal: true
+    id: enable_light_automation_sensor
+    name: "Enable Light Automation"
+    on_state:
+      then:
+        - script.execute: sync_chicken_light_automation
+  
+  - platform: homeassistant
+    entity_id: input_boolean.enable_water_filling_automation
+    internal: true
+    id: enable_water_filling_automation_sensor
+    name: "Enable Water Filling Automation"
+    on_state:
+      then:
+        - script.execute: sync_water_valve_automation
+
+output:
+  - platform: gpio
+    id: chicken_light_pin
+    pin:
+      pcf8574: outputs
+      number: 3
+      mode: OUTPUT
+      inverted: true
+
+
+switch:
+  - platform: gpio
+    id: chicken_door_direction_pin_1
+    pin:
+      pcf8574: outputs
+      number: 0
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: chicken_door_direction_pin_2
+
+    pin:
+      pcf8574: outputs
+      number: 1
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: chicken_door_power_pin
+    pin:
+      pcf8574: outputs
+      number: 2
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: water_valve_pin
+    name: "Water valve"
+    pin:
+      pcf8574: outputs
+      number: 4
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: water_heater_pin
+    name: "Water heater"
+    pin:
+      pcf8574: outputs
+      number: 5
+      mode: OUTPUT
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+# ------------------------------------------------------------------------------
+# Scripts
+# ------------------------------------------------------------------------------
+script:
+# Safe direction change for chicken door
+  - id: set_direction_safely
+    parameters:
+      open_direction: bool
+    then:
+      - if:
+          condition:
+            switch.is_on: chicken_door_power_pin
+          then:
+            - switch.turn_off: chicken_door_power_pin
+            - delay: !lambda 'return id(direction_switch_delay_ms);'
+      - if:
+          condition:
+            lambda: 'return open_direction;'
+          then:
+            - switch.turn_on: chicken_door_direction_pin_1  # ON + ON = Open direction
+            - switch.turn_on: chicken_door_direction_pin_2
+          else:
+            - switch.turn_off: chicken_door_direction_pin_1 # OFF + OFF = Close direction
+            - switch.turn_off: chicken_door_direction_pin_2
+      - delay: !lambda 'return id(direction_switch_delay_ms);'
+
+# Sync chicken light state based on current time and automation settings
+  - id: sync_chicken_light_automation
+    then:
+      - lambda: |-
+          auto now = id(rtc_time).now();
+          if (!now.is_valid()) {
+            ESP_LOGW("main", "Current time is not valid, skipping chicken light automation update.");
+            return;
+          }
+
+          if (!id(enable_light_automation_sensor).state) {
+            if (id(chicken_light).current_values.is_on()) {
+              id(chicken_light).turn_off().perform();
+              ESP_LOGI("main", "Chicken light automation disabled; turning light OFF.");
+            }
+            return;
+          }
+
+          const int current_minutes = now.hour * 60 + now.minute;
+          const int night_on_minutes = id(chicken_light_on_time_hour_night) * 60 + id(chicken_light_on_time_minutes_night);
+          const int night_off_minutes = id(chicken_light_off_time_hour_night) * 60 + id(chicken_light_off_time_minutes_night);
+          const int morning_on_minutes = id(chicken_light_on_time_hour_morning) * 60 + id(chicken_light_on_time_minutes_morning);
+          const int morning_off_minutes = id(chicken_light_off_time_hour_morning) * 60 + id(chicken_light_off_time_minutes_morning);
+
+          const bool night_window_active = current_minutes >= night_on_minutes && current_minutes < night_off_minutes;
+          const bool morning_window_active = current_minutes >= morning_on_minutes && current_minutes < morning_off_minutes;
+
+          if (night_window_active || morning_window_active) {
+            if (!id(chicken_light).current_values.is_on()) {
+              id(chicken_light).turn_on().perform();
+              ESP_LOGI("main", "Chicken light automation active; turning light ON.");
+            }
+          } else {
+            if (id(chicken_light).current_values.is_on()) {
+              id(chicken_light).turn_off().perform();
+              ESP_LOGI("main", "Chicken light automation active; turning light OFF.");
+            }
+          }
+
+# Sync chicken door state based on current time and automation settings
+  - id: sync_chicken_door_automation
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(enable_door_automation_sensor).state;'
+          then:
+            - if:
+                condition:
+                  - lambda: |-
+                      auto now = id(rtc_time).now();
+                      return (now.hour == id(door_open_hours) && now.minute == id(door_open_minutes));
+                then:
+                  - logger.log: "Opening chicken door"
+                  - cover.open: chicken_door
+            - if:
+                condition:
+                  - lambda: |-
+                      auto now = id(rtc_time).now();
+                      return (now.hour == id(door_close_hours) && now.minute == id(door_close_minutes));
+                then:
+                  - logger.log: "Closing chicken door"
+                  - cover.close: chicken_door
+          else:
+            - logger.log: "Door automation disabled, skipping door control."
+
+# Sync water valve state based on current time and configured duration
+  - id: sync_water_valve_automation
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(enable_water_filling_automation_sensor).state;'
+          then:
+            - if:
+                condition:
+                  - lambda: |-
+                      auto now = id(rtc_time).now();
+                      return now.hour == id(water_fill_start_time_hour) && now.minute == id(water_fill_start_time_minute);
+                then:
+                  - logger.log:
+                      format: "Starting water fill for %d seconds"
+                      args: [ 'id(water_fill_time_seconds)' ]
+                  - switch.turn_on: water_valve_pin
+                  - delay: !lambda 'return id(water_fill_time_seconds) * 1000;'
+                  - switch.turn_off: water_valve_pin
+                  - logger.log: "Water fill completed"
+          else:
+            - logger.log: "Water filling automation disabled, skipping water valve control."
+
+# Sync water heater state based on current temperature and automation settings
+  - id: sync_water_heater_automation
+    then:
+      - lambda: |-
+          unsigned long current_millis = millis();
+          float temp = id(TempOutside).state;
+
+          if (id(enable_water_heater_automation_sensor).state) {
+            if (id(water_heater_running)) {
+              if (current_millis - id(water_heater_start_time) >= 3600000) {
+                id(water_heater_pin).turn_off();
+                id(water_heater_running) = false;
+                id(water_heater_block_until) = current_millis + 1800000;
+                ESP_LOGI("main", "Water heater turned OFF after 1 hour, blocked for 30 minutes");
+              }
+            } else {
+              if (current_millis < id(water_heater_block_until)) {
+                // Still in blocking period, do nothing
+              } else if (temp < 1.0 && !isnan(temp)) {
+                id(water_heater_pin).turn_on();
+                id(water_heater_running) = true;
+                id(water_heater_start_time) = current_millis;
+                ESP_LOGI("main", "Water heater turned ON (temp: %.1f°C)", temp);
+              }
+            }
+          } else if (id(water_heater_running)) {
+            id(water_heater_pin).turn_off();
+            id(water_heater_running) = false;
+            ESP_LOGI("main", "Water heater automation disabled, turning OFF heater");
+          }
+
+
+# --- Cover (šoupací/stahovací dveře) ---
+cover:
+  - platform: template
+    name: "Chicken_door"
+    id: chicken_door
+    optimistic: false       # rely on end-stop feedback
+    has_position: true      # derive position from end stops
+    device_class: garage
+    lambda: |-
+      // Report open if top end-stop is active, closed if bottom is active, else keep last state
+      if (id(door_end_stop_top).state) {
+        return 1.0f;
+      }
+      if (id(door_end_stop_bottom).state) {
+        return 0.0f;
+      }
+      return {};
+
+    open_action:
+      # Set direction to OPEN, with safe power off and delay before switching
+      - script.execute:
+          id: set_direction_safely
+          open_direction: true
+      # Turn on power
+      - switch.turn_on: chicken_door_power_pin
+      - wait_until:
+          condition:
+            binary_sensor.is_on: door_end_stop_top
+          timeout: 6s
+      - lambda: |-
+          if (!id(door_end_stop_top).state) {
+            ESP_LOGW("main", "Open action timed out; stopping motor.");
+          }
+      # Turn off power and direction pins after reaching end stop or timeout
+      - switch.turn_off: chicken_door_power_pin
+      - switch.turn_off: chicken_door_direction_pin_1
+      - switch.turn_off: chicken_door_direction_pin_2
+
+    close_action:
+      # Set direction to CLOSE, with safe power off and delay before switching
+      - script.execute:
+          id: set_direction_safely
+          open_direction: false
+      # Turn on power
+      - switch.turn_on: chicken_door_power_pin
+      - wait_until:
+          condition:
+            binary_sensor.is_on: door_end_stop_bottom
+          timeout: 6s
+      - lambda: |-
+          if (!id(door_end_stop_bottom).state) {
+            ESP_LOGW("main", "Close action timed out; stopping motor.");
+          }
+      # Turn off power and direction pins after reaching end stop or timeout
+      - switch.turn_off: chicken_door_power_pin
+      - switch.turn_off: chicken_door_direction_pin_1
+      - switch.turn_off: chicken_door_direction_pin_2
+
+    stop_action:
+      - switch.turn_off: chicken_door_power_pin
+      - switch.turn_off: chicken_door_direction_pin_1
+      - switch.turn_off: chicken_door_direction_pin_2
+
+        
+light:
+  - platform: binary
+    id: chicken_light
+    name: "Chicken light"
+    output: chicken_light_pin
+    restore_mode: ALWAYS_OFF
+
+
+
+# ------------------------------------------------------------------------------
+# Sensors
+# ------------------------------------------------------------------------------
+
+sensor:
+  # DHT sensor for temperature and humidity inside the coop
+  - platform: dht
+    pin: 32
+    model: DHT22
+    temperature:
+      name: "Temperature Inside"
+      id: TempInside
+    humidity:
+      name: "Humidity Inside"
+      id: HumInside
+    update_interval: 60s
+
+  - platform: dht
+    pin: 33
+    model: DHT22
+    temperature:
+      name: "Temperature Outside"
+      id: TempOutside
+    humidity:
+      name: "Humidity Outside"
+      id: HumOutside
+    update_interval: 60s
+
+  # Home Assistant input_datetime sensor to get door close time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_door_close
+    internal: true
+    id: kurnik_noc_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - homeassistant.service:
+            service: persistent_notification.create
+            data:
+              message: !lambda |-
+                return "Door close time updated";
+        - lambda: |-
+            auto call = id(kurnik_noc_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(door_close_hours) = hour;
+            id(door_close_minutes) = minute;
+            ESP_LOGI("main", "Updated door close time: %02d:%02d", hour, minute);
+            id(door_close_hour_display).publish_state(hour);
+            id(door_close_minute_display).publish_state(minute);
+
+  # Home Assistant input_datetime sensor to get door open time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_door_open
+    internal: true
+    id: kurnik_den_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(kurnik_den_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(door_open_hours) = hour;
+            id(door_open_minutes) = minute;
+            ESP_LOGI("main", "Updated door open time: %02d:%02d", hour, minute);
+            id(door_open_hour_display).publish_state(hour);
+            id(door_open_minute_display).publish_state(minute);
+
+  # Home Assistant input_datetime sensor to get light on night time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_light_on_night
+    internal: true
+    id: kurnik_svetlo_on_night_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(kurnik_svetlo_on_night_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(chicken_light_on_time_hour_night) = hour;
+            id(chicken_light_on_time_minutes_night) = minute;
+            ESP_LOGI("main", "Updated light on time: %02d:%02d", hour, minute);
+            id(light_on_hour_night_display).publish_state(hour);
+            id(light_on_minute_night_display).publish_state(minute);
+
+  # Home Assistant input_datetime sensor to get light off night time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_light_off_night
+    internal: true
+    id: kurnik_svetlo_off_night_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(kurnik_svetlo_off_night_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(chicken_light_off_time_hour_night) = hour;
+            id(chicken_light_off_time_minutes_night) = minute;
+            ESP_LOGI("main", "Updated light off time: %02d:%02d", hour, minute);
+            id(light_off_hour_night_display).publish_state(hour);  
+            id(light_off_minute_night_display).publish_state(minute);
+
+# Home Assistant input_datetime sensor to get light off morning time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_light_off_morning
+    internal: true
+    id: kurnik_svetlo_off_morning_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(kurnik_svetlo_off_morning_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(chicken_light_off_time_hour_morning) = hour;
+            id(chicken_light_off_time_minutes_morning) = minute;
+            ESP_LOGI("main", "Updated light off time: %02d:%02d", hour, minute);
+            id(light_off_hour_morning_display).publish_state(hour);  
+            id(light_off_minute_morning_display).publish_state(minute);
+
+# Home Assistant input_datetime sensor to get light on morning time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_light_on_morning
+    internal: true
+    id: kurnik_svetlo_on_morning_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(kurnik_svetlo_on_morning_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(chicken_light_on_time_hour_morning) = hour;
+            id(chicken_light_on_time_minutes_morning) = minute;
+            ESP_LOGI("main", "Updated light on time: %02d:%02d", hour, minute);
+            id(light_on_hour_morning_display).publish_state(hour);  
+            id(light_on_minute_morning_display).publish_state(minute);
+
+# Home Assistant input_datetime sensor for water fill start time
+  - platform: homeassistant
+    entity_id: input_datetime.coop_water_time
+    internal: true
+    id: water_fill_time_sensor
+    attribute: timestamp
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(water_fill_time_sensor).state;
+            int total_seconds = (int)call;
+            int hour = (total_seconds / 3600) % 24;
+            int minute = (total_seconds % 3600) / 60;
+            id(water_fill_start_time_hour) = hour;
+            id(water_fill_start_time_minute) = minute;
+            ESP_LOGI("main", "Updated water fill start time: %02d:%02d", hour, minute);
+
+  # Home Assistant input_number sensor for water fill duration
+  - platform: homeassistant
+    entity_id: input_number.coop_water_duration
+    internal: true
+    id: water_fill_duration_sensor
+    on_value:
+      then:
+        - lambda: |-
+            float duration = id(water_fill_duration_sensor).state;
+            id(water_fill_time_seconds) = (int)duration;
+            ESP_LOGI("main", "Updated water fill duration: %d seconds", id(water_fill_time_seconds));
+
+
+# ------------------------------------------------------------------------------
+# Template sensors to display current settings
+# ------------------------------------------------------------------------------
+  # Template sensors for door times
+  - platform: template
+    name: "Door Open Hour"
+    id: door_open_hour_display
+    lambda: |-
+      return id(door_open_hours);
+    update_interval: never
+
+  - platform: template
+    name: "Door Open Minute"
+    id: door_open_minute_display
+    lambda: |-
+      return id(door_open_minutes);
+    update_interval: never
+
+  - platform: template
+    name: "Door Close Hour"
+    id: door_close_hour_display
+    lambda: |-
+      return id(door_close_hours);
+    update_interval: never
+
+  - platform: template
+    name: "Door Close Minute"
+    id: door_close_minute_display
+    lambda: |-
+      return id(door_close_minutes);
+    update_interval: never
+  # Template sensors for night light times
+  - platform: template
+    name: "Light Off Hour Night"
+    id: light_off_hour_night_display
+    lambda: |-
+      return id(chicken_light_off_time_hour_night);
+    update_interval: never
+  - platform: template
+    name: "Light On Hour Night"
+    id: light_on_hour_night_display
+    lambda: |-
+      return id(chicken_light_on_time_hour_night);
+    update_interval: never
+  - platform: template
+    name: "Light Off Minute Night"
+    id: light_off_minute_night_display
+    lambda: |-
+      return id(chicken_light_off_time_minutes_night);
+    update_interval: never
+  - platform: template
+    name: "Light On Minute Night"
+    id: light_on_minute_night_display
+    lambda: |-
+      return id(chicken_light_on_time_minutes_night);
+    update_interval: never
+  # Template sensors for morning light times
+  - platform: template
+    name: "Light Off Hour Morning"
+    id: light_off_hour_morning_display
+    lambda: |-
+      return id(chicken_light_off_time_hour_morning);
+    update_interval: never
+  - platform: template
+    name: "Light On Hour Morning"
+    id: light_on_hour_morning_display
+    lambda: |-
+      return id(chicken_light_on_time_hour_morning);
+    update_interval: never
+  - platform: template
+    name: "Light Off Minute Morning"
+    id: light_off_minute_morning_display
+    lambda: |-
+      return id(chicken_light_off_time_minutes_morning);
+    update_interval: never
+  - platform: template
+    name: "Light On Minute Morning"
+    id: light_on_minute_morning_display
+    lambda: |-
+      return id(chicken_light_on_time_minutes_morning);
+    update_interval: never
+
+
+    
+# ------------------------------------------------------------------------------
+# Automation
+# ------------------------------------------------------------------------------
+
+# Optional fallback: use RTC time if HA time is not available
+interval:
+  - interval: 10min
+    then:
+      - lambda: |-
+          if (!id(ha_time).now().is_valid()) {
+            ESP_LOGW("main", "Home Assistant time not valid, using RTC time.");
+            auto rtc_now = id(rtc_time).now();
+            ESP_LOGI("main", "RTC time: %04d-%02d-%02d %02d:%02d:%02d",
+                     rtc_now.year, rtc_now.month, rtc_now.day_of_month,
+                     rtc_now.hour, rtc_now.minute, rtc_now.second);
+          }
+
+# Chicken door control based on time
+  - interval: 1min
+    then:
+      - script.execute: sync_chicken_door_automation
+
+# Chicken Night light control based on time
+      - script.execute: sync_chicken_light_automation
+
+# Water valve control - open valve at set time for set duration
+      - script.execute: sync_water_valve_automation
+
+# Water heater control based on automation state and temperature
+      - script.execute: sync_water_heater_automation
