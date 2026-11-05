@@ -1,0 +1,28 @@
+# A single dashboard view. In an existing dashboard: Edit dashboard > pencil next to the view tab >
+# YAML (or add a new view and open its YAML editor), then paste this whole file.
+title: Topení
+path: topeni
+icon: mdi:radiator
+type: masonry
+cards:
+  - type: entities
+    title: Kotel
+    entities:
+      - entity: input_select.heating_mode
+        name: Režim
+      - entity: input_boolean.heating_season
+        name: Topná sezóna
+      # Replace with the entity ID of your boiler relay
+      - entity: switch.todo_boiler_relay
+        name: Relé kotle
+      - entity: input_text.heating_status
+        name: Stav a důvod
+      - entity: input_number.heating_demand
+        name: Vážená poptávka
+  - type: history-graph
+    title: Poptávka a relé
+    hours_to_show: 24
+    entities:
+      - entity: input_number.heating_demand
+      # Replace with the entity ID of your boiler relay
+      - entity: switch.todo_boiler_relay

@@ -1,0 +1,40 @@
+# Optional helpers for the "Topení - řízení kotle podle vah místností" blueprint.
+# Copy to config/packages/heating_helpers.yaml (packages must be enabled in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+# ) or create the same helpers in Settings > Devices & services > Helpers.
+# Then select them in the blueprint (Režim / preset, Topná sezóna, Textový helper, Číselný helper).
+
+input_select:
+  heating_mode:
+    name: Topení - režim
+    options:
+      - none
+      - away
+      - comfort
+      - eco
+      - home
+      - sleep
+      - work from home
+      - vacation
+    icon: mdi:home-thermometer
+
+input_boolean:
+  heating_season:
+    name: Topení - topná sezóna
+    icon: mdi:sun-snowflake-variant
+
+input_text:
+  heating_status:
+    name: Topení - stav
+    max: 255
+    icon: mdi:text-box-search
+
+input_number:
+  heating_demand:
+    name: Topení - vážená poptávka
+    min: 0
+    max: 100
+    step: 0.01
+    mode: box
+    icon: mdi:fire-circle

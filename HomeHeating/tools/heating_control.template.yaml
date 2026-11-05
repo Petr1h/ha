@@ -1,0 +1,901 @@
+blueprint:
+  name: Topení - řízení kotle podle vah místností
+  description: >-
+    One automation that controls the whole heating: it reads any number of rooms (each with one or more Sonoff
+    TRV-ZBT valves and an optional external temperature sensor), computes the weighted heat demand
+    (sum of room weight x temperature deficit) and switches the boiler relay on and off with hysteresis,
+    minimum on/off times and open-valve protection. It also pushes the target temperature to the TRVs and
+    can feed the external temperature to the TRVs through Zigbee2MQTT.
+
+
+    Add and remove rooms in the "Místnosti" list with the "Add" button (a room without a TRV is ignored).
+    Every other entity is optional.
+    Switch season, mode and schedule helpers are optional too.
+  domain: automation
+  source_url: https://github.com/Petr1h/HA/blob/main/HomeHeating/blueprints/automation/petr1h/heating_control.yaml
+  homeassistant:
+    min_version: 2025.1.0
+  input:
+    boiler_section:
+      name: Kotel
+      icon: mdi:water-boiler
+      collapsed: false
+      input:
+        relay:
+          name: Relé kotle
+          description: The switch entity that turns the boiler on and off.
+          selector:
+            entity:
+              domain: switch
+        season_switch:
+          name: Topná sezóna (volitelné)
+          description: An input_boolean. When "off" (summer mode) the boiler is fully off. Empty = always in season.
+          default: ""
+          selector:
+            entity:
+              domain: input_boolean
+        global_mode:
+          name: Režim / preset (volitelné)
+          description: >-
+            An input_select whose selected option sets the target temperature of every room. Recognised options
+            (case-insensitive): none, away, comfort, eco, home, sleep (or night), work from home (or work_from_home,
+            wfh) and vacation (frost temperature). Any other value counts as none. "none" = the schedule decides
+            between comfort and eco. Empty = always none.
+          default: ""
+          selector:
+            entity:
+              domain: input_select
+        schedule:
+          name: Rozvrh (volitelné)
+          description: A schedule helper for all rooms. "on" = comfort temperature, "off" = eco temperature. Empty = always comfort in Home mode.
+          default: ""
+          selector:
+            entity:
+              domain: schedule
+    thresholds_section:
+      name: Prahy, časy a ochrany
+      icon: mdi:chart-line
+      collapsed: true
+      input:
+        on_threshold:
+          name: Práh zapnutí
+          description: >-
+            Weighted demand (sum of weight x deficit in K over all rooms) at which the boiler turns on.
+            A room with weight w alone needs a deficit of threshold / w, e.g. 6 / 2 = 3 K for a low-weight
+            room but only 0.75 K for a room with weight 8.
+          default: 6
+          selector:
+            number:
+              min: 0.5
+              max: 100
+              step: 0.5
+              mode: box
+        off_threshold:
+          name: Práh vypnutí
+          description: The boiler turns off when the weighted demand falls to this value or below (keep it lower than the on threshold).
+          default: 2
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 0.5
+              mode: box
+        min_on_minutes:
+          name: Minimální doba zapnutí (min)
+          default: 10
+          selector:
+            number:
+              min: 0
+              max: 120
+              step: 1
+              unit_of_measurement: min
+              mode: box
+        min_off_minutes:
+          name: Minimální doba vypnutí (min)
+          default: 10
+          selector:
+            number:
+              min: 0
+              max: 120
+              step: 1
+              unit_of_measurement: min
+              mode: box
+        min_open_valves:
+          name: Minimální počet otevřených ventilů
+          description: >-
+            The boiler is not started (and is stopped) when fewer TRVs than this report hvac_action "heating".
+            Protects the circuit against running with closed valves. 0 disables the check.
+          default: 1
+          selector:
+            number:
+              min: 0
+              max: 24
+              step: 1
+              mode: box
+        frost_override:
+          name: Protimrazový vynucený start
+          description: Start the boiler (still respecting the minimum times and open valves) when any room is below the frost temperature, regardless of the thresholds.
+          default: true
+          selector:
+            boolean:
+        fail_safe_state:
+          name: Chování při selhání
+          description: >-
+            What the relay does when there is no valid decision (no rooms configured, relay unavailable).
+            "off" protects the circuit from running with closed valves, "keep" leaves the relay as it is.
+          default: "off"
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: Vypnout kotel
+                  value: "off"
+                - label: Ponechat stav relé
+                  value: keep
+    targets_section:
+      name: Cílové teploty podle presetu (všechny místnosti)
+      icon: mdi:thermometer-lines
+      collapsed: true
+      input:
+        comfort_temp:
+          name: Komfortní teplota (preset comfort, rozvrh zapnut)
+          default: 21
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        eco_temp:
+          name: Eco teplota (preset eco, rozvrh vypnut)
+          default: 18
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        home_temp:
+          name: Teplota presetu home
+          default: 21
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        night_temp:
+          name: Teplota presetu sleep (noc)
+          default: 18
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        away_temp:
+          name: Teplota presetu away (nepřítomnost)
+          default: 16
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        work_temp:
+          name: Teplota presetu work from home
+          default: 20
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        frost_temp:
+          name: Protimrazová teplota
+          description: Minimum target in every preset and the temperature used in vacation mode and with an open window.
+          default: 8
+          selector:
+            number:
+              min: 5
+              max: 15
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+    demand_section:
+      name: Poptávka a čidla
+      icon: mdi:scale-balance
+      collapsed: true
+      input:
+        deadband:
+          name: Necitlivost (°C)
+          description: Deficits smaller than this are ignored (the TRV handles them on its own).
+          default: 0.3
+          selector:
+            number:
+              min: 0
+              max: 2
+              step: 0.1
+              unit_of_measurement: °C
+              mode: box
+        max_deficit:
+          name: Maximální započítaný deficit (°C)
+          description: Caps the deficit of one room so a single very cold room cannot dominate the demand.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 15
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        stale_minutes:
+          name: Časový limit zastaralých dat (min)
+          description: A temperature source without an update for this long is treated as invalid and the other source is used.
+          default: 120
+          selector:
+            number:
+              min: 5
+              max: 1440
+              step: 5
+              unit_of_measurement: min
+              mode: box
+    trv_section:
+      name: Ovládání hlaviček (TRV)
+      icon: mdi:radiator
+      collapsed: true
+      input:
+        setpoint_deadband:
+          name: Tolerance cílové teploty (°C)
+          description: The TRV setpoint is only rewritten when it differs from the target by at least this much.
+          default: 0.4
+          selector:
+            number:
+              min: 0.1
+              max: 2
+              step: 0.1
+              unit_of_measurement: °C
+              mode: box
+        enforce_heat_mode:
+          name: Vynutit režim "heat"
+          description: >-
+            Sets hvac mode "heat" on TRVs that are in another mode (e.g. "auto" would follow the TRV's own weekly
+            schedule and conflict with this automation).
+          default: true
+          selector:
+            boolean:
+        push_external:
+          name: Posílat externí teplotu do TRV (Zigbee2MQTT)
+          description: >-
+            For rooms with an external sensor: publish the effective temperature to the TRV through MQTT
+            (`external_temperature_input`) when the external source is active, and switch the TRV back to its
+            built-in sensor otherwise.
+          default: false
+          selector:
+            boolean:
+        base_topic:
+          name: Základní MQTT topic Zigbee2MQTT
+          default: zigbee2mqtt
+          selector:
+            text:
+        ext_refresh:
+          name: Interval odesílání externí teploty (min)
+          description: The Zigbee2MQTT friendly name is taken from the device name of the climate entity.
+          default: 5
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: 1 min
+                  value: "1"
+                - label: 5 min
+                  value: "5"
+                - label: 10 min
+                  value: "10"
+                - label: 15 min
+                  value: "15"
+                - label: 30 min
+                  value: "30"
+    feedback_section:
+      name: Zpětná vazba z ViCare a upozornění
+      icon: mdi:bell-alert
+      collapsed: true
+      input:
+        burner_entity:
+          name: Entita hořáku (volitelné, read-only)
+          description: A ViCare entity that shows whether the burner is running. Empty = check disabled.
+          default: ""
+          selector:
+            entity:
+        burner_active_values:
+          name: Hodnoty znamenající "hořák běží"
+          description: Comma separated, compared case-insensitively with the entity state.
+          default: "on,true,active,heating"
+          selector:
+            text:
+        feedback_delay:
+          name: Prodleva před hlášením problému (min)
+          description: How long relay and burner may disagree, or a TRV may be unavailable, before an alert is raised.
+          default: 10
+          selector:
+            number:
+              min: 1
+              max: 120
+              step: 1
+              unit_of_measurement: min
+              mode: box
+        alert_action:
+          name: Akce při upozornění (volitelné)
+          description: Actions run when an alert is raised, e.g. a notify action. The variable `alert_message` holds the text. A persistent notification is always created.
+          default: []
+          selector:
+            action:
+        alert_repeat_minutes:
+          name: Opakování upozornění (min)
+          default: 60
+          selector:
+            number:
+              min: 5
+              max: 1440
+              step: 5
+              unit_of_measurement: min
+              mode: box
+    output_section:
+      name: Výstupy a ladění
+      icon: mdi:text-box-search
+      collapsed: true
+      input:
+        status_text:
+          name: Textový helper pro stav (volitelné)
+          description: An input_text (max length 255) that receives the decision, demand and reason, e.g. for a dashboard.
+          default: ""
+          selector:
+            entity:
+              domain: input_text
+        demand_number:
+          name: Číselný helper pro poptávku (volitelné)
+          description: An input_number (min 0, max 100) that receives the current weighted demand, e.g. for a graph.
+          default: ""
+          selector:
+            entity:
+              domain: input_number
+        log_decisions:
+          name: Zapisovat spínání do logbooku
+          default: true
+          selector:
+            boolean:
+        debug_log:
+          name: Podrobný log každou minutu
+          description: Writes a per-room table to the Home Assistant log (level info) on every run. Turn on for troubleshooting only.
+          default: false
+          selector:
+            boolean:
+    rooms_section:
+      name: Místnosti
+      icon: mdi:home-thermometer
+      collapsed: false
+      input:
+        rooms:
+          name: Místnosti
+          description: >-
+            One item per room, use the add button to add a room and the item menu to remove it. Required: name and
+            TRV list (a room without a TRV is ignored). Missing optional fields use: source = trv, weight = 5,
+            adjust = 0, offset = 0, always = off. Weight 0 = room never starts the boiler, 10 = most important.
+            Fields: name, trvs (climate entities), ext (external temperature sensor), source (trv / external),
+            weight, adjust (target shift in °C), offset (TRV sensor correction in °C), window (binary sensor,
+            open = frost temperature), always (ignore schedule and sleep preset), t_away / t_comfort / t_eco /
+            t_home / t_sleep / t_work (temperature of this room in that preset; empty = global preset
+            temperature + adjust; preset none uses t_comfort or t_eco according to the schedule).
+          default:
+@@ROOM_DEFAULTS@@
+          selector:
+            object:
+              multiple: true
+              label_field: name
+              fields:
+                name:
+                  label: Název místnosti
+                  required: true
+                  selector:
+                    text:
+                trvs:
+                  label: Hlavice (TRV)
+                  required: true
+                  selector:
+                    entity:
+                      domain: climate
+                      multiple: true
+                ext:
+                  label: Externí teplotní čidlo
+                  selector:
+                    entity:
+                      domain: sensor
+                      device_class: temperature
+                source:
+                  label: Zdroj teploty (trv / external)
+                  selector:
+                    select:
+                      mode: dropdown
+                      options:
+                        - label: Vestavěné čidlo TRV
+                          value: trv
+                        - label: Externí čidlo
+                          value: external
+                weight:
+                  label: Váha místnosti (0-10)
+                  selector:
+                    number:
+                      min: 0
+                      max: 10
+                      step: 0.5
+                      mode: box
+                adjust:
+                  label: Posun cílové teploty (°C)
+                  selector:
+                    number:
+                      min: -5
+                      max: 5
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+                offset:
+                  label: Korekce vestavěného čidla TRV (°C)
+                  selector:
+                    number:
+                      min: -10
+                      max: 10
+                      step: 0.1
+                      unit_of_measurement: °C
+                      mode: box
+                window:
+                  label: Okenní kontakt
+                  selector:
+                    entity:
+                      domain: binary_sensor
+                always:
+                  label: Topit vždy (např. koupelna)
+                  selector:
+                    boolean:
+                t_away:
+                  label: Teplota presetu away (°C)
+                  selector:
+                    number:
+                      min: 5
+                      max: 30
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+                t_comfort:
+                  label: Teplota presetu comfort (°C)
+                  selector:
+                    number:
+                      min: 5
+                      max: 30
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+                t_eco:
+                  label: Teplota presetu eco (°C)
+                  selector:
+                    number:
+                      min: 5
+                      max: 30
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+                t_home:
+                  label: Teplota presetu home (°C)
+                  selector:
+                    number:
+                      min: 5
+                      max: 30
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+                t_sleep:
+                  label: Teplota presetu sleep (°C)
+                  selector:
+                    number:
+                      min: 5
+                      max: 30
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+                t_work:
+                  label: Teplota presetu work from home (°C)
+                  selector:
+                    number:
+                      min: 5
+                      max: 30
+                      step: 0.5
+                      unit_of_measurement: °C
+                      mode: box
+mode: single
+max_exceeded: silent
+
+# Static values usable inside trigger templates
+trigger_variables:
+  relay_id: !input relay
+  burner_id: !input burner_entity
+  burner_values: !input burner_active_values
+  rooms_cfg: !input rooms
+triggers:
+  - trigger: time_pattern
+    minutes: "/1"
+    id: tick
+  - trigger: state
+    entity_id: !input relay
+    id: relay
+  - trigger: homeassistant
+    event: start
+    id: start
+  # Fires once when a problem appears and persists for the delay (first alert without waiting for the repeat slot)
+  - trigger: template
+    id: alert
+    value_template: >-
+      {%- set trvs = rooms_cfg | map(attribute='trvs') | select('defined') | sum(start=[]) -%}
+      {%- set found = expand(trvs) | list -%}
+      {%- set bad = found | rejectattr('state', 'in', ['unavailable', 'unknown']) | list | count -%}
+      {%- set burner_on = burner_id != '' and states(burner_id) | lower in (burner_values | lower).split(',') | map('trim') | list -%}
+      {{ states(relay_id) in ['unavailable', 'unknown']
+         or (trvs | length) > (found | length)
+         or (found | length) > bad
+         or (burner_id != '' and states(burner_id) not in ['unavailable', 'unknown']
+             and (states(relay_id) == 'on') != burner_on) }}
+    for:
+      minutes: !input feedback_delay
+
+variables:
+  relay_id: !input relay
+  season_id: !input season_switch
+  mode_id: !input global_mode
+  schedule_id: !input schedule
+  on_th: !input on_threshold
+  off_th: !input off_threshold
+  min_on: !input min_on_minutes
+  min_off: !input min_off_minutes
+  min_valves: !input min_open_valves
+  frost_override: !input frost_override
+  fail_safe: !input fail_safe_state
+  comfort_t: !input comfort_temp
+  eco_t: !input eco_temp
+  home_t: !input home_temp
+  night_t: !input night_temp
+  away_t: !input away_temp
+  work_t: !input work_temp
+  frost_t: !input frost_temp
+  deadband: !input deadband
+  max_deficit: !input max_deficit
+  stale: !input stale_minutes
+  sp_deadband: !input setpoint_deadband
+  enforce_heat: !input enforce_heat_mode
+  push_external: !input push_external
+  base_topic: !input base_topic
+  ext_refresh: !input ext_refresh
+  burner_id: !input burner_entity
+  burner_values: !input burner_active_values
+  feedback_delay: !input feedback_delay
+  repeat_min: !input alert_repeat_minutes
+  log_decisions: !input log_decisions
+  debug_log: !input debug_log
+  status_id: !input status_text
+  demand_id: !input demand_number
+  rooms_in: !input rooms
+  # Room list with defaults for the optional fields of every item
+  rooms: >-
+    {%- set ns = namespace(out=[]) -%}
+    {%- for r in rooms_in -%}
+      {%- set t = r.get('trvs') or [] -%}
+      {%- set ns.out = ns.out + [{
+            'name': r.get('name') or ('Místnost ' ~ loop.index),
+            'trvs': [t] if t is string else t,
+            'ext': r.get('ext') or '',
+            'source': 'external' if r.get('source') == 'external' else 'trv',
+            'weight': r.get('weight', 5) | float(5),
+            'adjust': r.get('adjust', 0) | float(0),
+            'offset': r.get('offset', 0) | float(0),
+            'window': r.get('window') or '',
+            'always': r.get('always') == true,
+            't_away': r.get('t_away'), 't_comfort': r.get('t_comfort'), 't_eco': r.get('t_eco'),
+            't_home': r.get('t_home'), 't_sleep': r.get('t_sleep'), 't_work': r.get('t_work')}] -%}
+    {%- endfor -%}
+    {{ ns.out }}
+actions:
+  - variables:
+      # ------------------------------------------------------------------ rooms
+      # One dict per configured room: effective temperature, target, deficit and weighted demand.
+      room_data: >-
+        {%- set ns = namespace(out=[]) -%}
+        {%- set m = (states(mode_id) if mode_id else 'none') | lower | replace('_', ' ') | replace('-', ' ') | trim -%}
+        {%- set mode = 'vacation' if m.startswith('vac') else ('away' if m.startswith('away') else ('sleep' if m in ['sleep', 'night'] else ('work' if m.startswith('work') or m == 'wfh' else (m if m in ['comfort', 'eco', 'home'] else 'none')))) -%}
+        {%- set sched_on = schedule_id == '' or is_state(schedule_id, 'on') -%}
+        {%- for r in rooms if r.trvs | length > 0 -%}
+          {%- set t = namespace(v=[], open=0, bad=0) -%}
+          {%- for s in expand(r.trvs) -%}
+            {%- if s.state in ['unavailable', 'unknown'] -%}
+              {%- set t.bad = t.bad + 1 -%}
+            {%- else -%}
+              {%- if s.attributes.get('hvac_action') == 'heating' -%}{%- set t.open = t.open + 1 -%}{%- endif -%}
+              {%- set ct = s.attributes.get('current_temperature') -%}
+              {%- if is_number(ct) and (now() - s.last_reported).total_seconds() <= stale * 60 -%}
+                {%- set t.v = t.v + [ct | float] -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set bad = (r.trvs | length) - (expand(r.trvs) | list | count) + t.bad -%}
+          {%- set es = (expand(r.ext) | list | first | default(none)) if r.ext else none -%}
+          {%- set ext_t = ((es.state | float) | round(2)) if es is not none and is_number(es.state)
+                           and (now() - es.last_reported).total_seconds() <= stale * 60 else none -%}
+          {%- set trv_t = (((t.v | average) + r.offset) | round(2)) if t.v | length > 0 else none -%}
+          {%- if r.source == 'external' -%}
+            {%- set used = 'external' if ext_t is not none else ('trv' if trv_t is not none else 'none') -%}
+          {%- else -%}
+            {%- set used = 'trv' if trv_t is not none else ('external' if ext_t is not none else 'none') -%}
+          {%- endif -%}
+          {%- set eff = ext_t if used == 'external' else (trv_t if used == 'trv' else none) -%}
+          {%- if r.window != '' and is_state(r.window, 'on') -%}{%- set reason = 'window' -%}
+          {%- elif mode == 'vacation' -%}{%- set reason = 'vacation' -%}
+          {%- elif mode == 'away' -%}{%- set reason = 'away' -%}
+          {%- elif mode == 'sleep' -%}{%- set reason = 'comfort' if r.always else 'sleep' -%}
+          {%- elif mode != 'none' -%}{%- set reason = mode -%}
+          {%- elif r.always or sched_on -%}{%- set reason = 'comfort' -%}
+          {%- else -%}{%- set reason = 'eco' -%}
+          {%- endif -%}
+          {%- set base = {'window': frost_t, 'vacation': frost_t, 'away': away_t, 'sleep': night_t,
+                          'comfort': comfort_t, 'eco': eco_t, 'home': home_t, 'work': work_t}[reason] -%}
+          {#- a temperature set for this room and preset replaces the global one (the shift is not added) -#}
+          {%- set own = {'away': r.t_away, 'sleep': r.t_sleep, 'comfort': r.t_comfort, 'eco': r.t_eco,
+                         'home': r.t_home, 'work': r.t_work}[reason] if reason not in ['window', 'vacation'] else none -%}
+          {%- set adj = r.adjust if reason not in ['window', 'vacation'] else 0 -%}
+          {%- set target = [(own | float) if is_number(own) else base + adj, frost_t] | max -%}
+          {%- set deficit = ([target - eff, 0] | max) if eff is not none else 0 -%}
+          {%- set used_deficit = [(deficit if deficit >= deadband else 0), max_deficit] | min -%}
+          {%- set ns.out = ns.out + [{
+                'name': r.name, 'trvs': r.trvs, 'has_ext': r.ext != '', 'valid': eff is not none,
+                'eff': eff, 'used': used, 'selected': r.source, 'fallback': used != 'none' and used != r.source,
+                'target': target, 'reason': reason, 'weight': r.weight, 'deficit': deficit,
+                'demand': ((r.weight * used_deficit) | round(2)), 'open': t.open, 'bad': bad,
+                'frost': eff is not none and eff < frost_t}] -%}
+        {%- endfor -%}
+        {{ ns.out }}
+      # --------------------------------------------------------------- aggregate
+      demand: >-
+        {%- set ns = namespace(d=0) -%}
+        {%- for x in room_data if x.valid -%}{%- set ns.d = ns.d + x.demand -%}{%- endfor -%}
+        {{ ns.d | round(2) }}
+      requesting: >-
+        {{ room_data | selectattr('demand', '>', 0) | list | count }}
+      valves_open: >-
+        {{ room_data | sum(attribute='open') }}
+      frost_alarm: >-
+        {{ room_data | selectattr('frost') | list | count > 0 }}
+      top_room: >-
+        {%- set ns = namespace(best=0, name='none') -%}
+        {%- for x in room_data if x.demand > ns.best -%}{%- set ns.best = x.demand -%}{%- set ns.name = x.name -%}{%- endfor -%}
+        {{ ns.name }}
+      invalid_rooms: >-
+        {{ room_data | rejectattr('valid') | map(attribute='name') | list }}
+      bad_valves: >-
+        {{ room_data | sum(attribute='bad') }}
+      season_off: >-
+        {{ season_id != '' and is_state(season_id, 'off') }}
+      relay_state: "{{ states(relay_id) }}"
+      relay_age_min: >-
+        {%- set r = expand(relay_id) | list | first | default(none) -%}
+        {{ ((now() - r.last_changed).total_seconds() / 60) | round(1) if r is not none else 0 }}
+      # "<decision>;<reason>"; decision is on / off / unknown
+      verdict: >-
+        {%- set relay_on = relay_state == 'on' -%}
+        {%- if season_off -%}off;Topná sezóna vypnuta
+        {%- elif relay_state in ['unavailable', 'unknown'] -%}unknown;Relé kotle není dostupné
+        {%- elif room_data | length == 0 -%}unknown;Není nastavena žádná místnost
+        {%- elif relay_on and relay_age_min < min_on -%}on;Minimální doba zapnutí ({{ (min_on - relay_age_min) | round(1) }} min zbývá)
+        {%- elif not relay_on and relay_age_min < min_off -%}off;Minimální doba vypnutí ({{ (min_off - relay_age_min) | round(1) }} min zbývá)
+        {%- elif valves_open < min_valves -%}off;Málo otevřených ventilů ({{ valves_open }} < {{ min_valves | int }})
+        {%- elif frost_override and frost_alarm -%}on;Protimrazová ochrana
+        {%- elif relay_on and demand <= off_th -%}off;Poptávka {{ demand }} pod prahem vypnutí {{ off_th }}
+        {%- elif relay_on -%}on;Poptávka {{ demand }} nad prahem vypnutí {{ off_th }} (top: {{ top_room }})
+        {%- elif demand >= on_th -%}on;Poptávka {{ demand }} dosáhla prahu zapnutí {{ on_th }} (top: {{ top_room }})
+        {%- else -%}off;Poptávka {{ demand }} pod prahem zapnutí {{ on_th }}
+        {%- endif -%}
+      decision: "{{ verdict.split(';', 1)[0] }}"
+      reason: "{{ verdict.split(';', 1)[1] }}"
+      # What the relay should do. Unknown decision -> fail-safe, except that an unavailable relay cannot be switched.
+      wanted: >-
+        {%- if decision in ['on', 'off'] -%}{{ decision }}
+        {%- else -%}{{ 'off' if fail_safe == 'off' else 'keep' }}{%- endif -%}
+      # ------------------------------------------------------------------ feedback
+      burner_known: >-
+        {{ burner_id != '' and states(burner_id) not in ['unavailable', 'unknown'] }}
+      burner_running: >-
+        {{ burner_id != '' and states(burner_id) | lower in (burner_values | lower).split(',') | map('trim') | list }}
+      burner_age_min: >-
+        {%- set b = (expand(burner_id) | list | first | default(none)) if burner_id != '' else none -%}
+        {{ ((now() - b.last_changed).total_seconds() / 60) | round(1) if b is not none else 0 }}
+      alerts: >-
+        {%- set ns = namespace(v=[]) -%}
+        {%- if relay_state in ['unavailable', 'unknown'] -%}{%- set ns.v = ns.v + ['Relé kotle není dostupné'] -%}{%- endif -%}
+        {%- if room_data | length == 0 -%}{%- set ns.v = ns.v + ['Není nastavena žádná místnost'] -%}{%- endif -%}
+        {%- if invalid_rooms | length > 0 -%}
+          {%- set ns.v = ns.v + ['Místnosti bez platné teploty: ' ~ (invalid_rooms | join(', '))] -%}
+        {%- endif -%}
+        {%- if bad_valves > 0 -%}{%- set ns.v = ns.v + ['Nedostupné hlavice: ' ~ bad_valves] -%}{%- endif -%}
+        {%- if burner_known and relay_state == 'on' and relay_age_min > feedback_delay and not burner_running and burner_age_min > feedback_delay -%}
+          {%- set ns.v = ns.v + ['Relé je zapnuté, ale hořák neběží'] -%}
+        {%- elif burner_known and relay_state == 'off' and relay_age_min > feedback_delay and burner_running and burner_age_min > feedback_delay -%}
+          {%- set ns.v = ns.v + ['Hořák běží, ačkoli je relé vypnuté'] -%}
+        {%- endif -%}
+        {{ ns.v }}
+      status: >-
+        {{ (decision ~ ' | poptávka ' ~ demand ~ ' | ' ~ reason)[:255] }}
+
+  # --------------------------------------------------------- 1) switch the relay
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ wanted == 'on' and relay_state == 'off' }}"
+        sequence:
+          - action: switch.turn_on
+            target:
+              entity_id: !input relay
+          - if:
+              - condition: template
+                value_template: "{{ log_decisions }}"
+            then:
+              - action: logbook.log
+                data:
+                  name: Topení
+                  message: "Kotel zapnut: {{ reason }}"
+                  entity_id: !input relay
+      - conditions:
+          - condition: template
+            value_template: "{{ wanted == 'off' and relay_state == 'on' }}"
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: !input relay
+          - if:
+              - condition: template
+                value_template: "{{ log_decisions }}"
+            then:
+              - action: logbook.log
+                data:
+                  name: Topení
+                  message: "Kotel vypnut: {{ reason }}"
+                  entity_id: !input relay
+
+  # ------------------------------------------------ 2) target temperature in TRVs
+  - repeat:
+      for_each: "{{ room_data }}"
+      sequence:
+        - variables:
+            room: "{{ repeat.item }}"
+        - repeat:
+            for_each: "{{ room.trvs }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ states(repeat.item) not in ['unavailable', 'unknown'] }}"
+                then:
+                  - if:
+                      - condition: template
+                        value_template: "{{ enforce_heat and states(repeat.item) != 'heat' }}"
+                    then:
+                      - action: climate.set_hvac_mode
+                        target:
+                          entity_id: "{{ repeat.item }}"
+                        data:
+                          hvac_mode: heat
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{ ((state_attr(repeat.item, 'temperature') | float(-100)) - room.target) | abs >= (sp_deadband | float(0.4)) }}
+                    then:
+                      - action: climate.set_temperature
+                        target:
+                          entity_id: "{{ repeat.item }}"
+                        data:
+                          temperature: "{{ room.target }}"
+
+  # ---------------------- 3) external temperature into the TRVs (Zigbee2MQTT)
+  - if:
+      - condition: template
+        value_template: >-
+          {{ push_external and trigger.id in ['tick', 'start'] and (now().minute % (ext_refresh | int(5)) == 0 or trigger.id == 'start') }}
+    then:
+      - repeat:
+          for_each: "{{ room_data | selectattr('has_ext') | list }}"
+          sequence:
+            - variables:
+                room: "{{ repeat.item }}"
+            - repeat:
+                for_each: "{{ room.trvs }}"
+                sequence:
+                  - variables:
+                      fname: "{{ device_attr(repeat.item, 'name') }}"
+                  - choose:
+                      # external source active: send mode + temperature
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ room.used == 'external' and room.eff is number and room.eff >= 0 and fname not in [none, ''] }}"
+                        sequence:
+                          - action: mqtt.publish
+                            data:
+                              topic: "{{ base_topic }}/{{ fname }}/set"
+                              payload: >-
+                                {"temperature_sensor_select": "remote_temperature", "external_temperature_input": {{ room.eff | float | round(1) }} }
+                      # built-in source active (selected or fallback): switch the TRV back
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ room.used != 'external' and fname not in [none, ''] }}"
+                        sequence:
+                          - action: mqtt.publish
+                            data:
+                              topic: "{{ base_topic }}/{{ fname }}/set"
+                              payload: '{"temperature_sensor_select": "local_temperature"}'
+
+  # ----------------------------------------------------- 4) optional status outputs
+  - if:
+      - condition: template
+        value_template: "{{ status_id != '' and states(status_id) != status }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ status_id }}"
+        data:
+          value: "{{ status }}"
+  - if:
+      - condition: template
+        value_template: "{{ demand_id != '' and (states(demand_id) | float(-1)) != (demand | float(0)) }}"
+    then:
+      - action: input_number.set_value
+        target:
+          entity_id: "{{ demand_id }}"
+        data:
+          value: "{{ [demand | float(0), 100] | min }}"
+  - if:
+      - condition: template
+        value_template: "{{ debug_log }}"
+    then:
+      - action: system_log.write
+        data:
+          level: info
+          logger: heating_control
+          message: >-
+            {{ decision }} ({{ reason }}) demand={{ demand }} valves_open={{ valves_open }} |
+            {% for x in room_data %}{{ x.name }}: {{ x.eff }}/{{ x.target }} ({{ x.used }}) w={{ x.weight }} d={{ x.deficit }} demand={{ x.demand }} open={{ x.open }}; {% endfor %}
+
+  # ------------------------------------------------------------------ 5) alerts
+  # The persistent notification is refreshed every minute, the custom action runs when the problem first
+  # appears (trigger "alert") and then every repeat_min minutes.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['tick', 'start', 'alert'] and alerts | length > 0 }}"
+        sequence:
+          - variables:
+              alert_message: "Topení: {{ alerts | join('; ') }}"
+          - action: persistent_notification.create
+            data:
+              title: Topení - upozornění
+              message: "{{ alert_message }}"
+              notification_id: heating_alerts
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ trigger.id == 'alert'
+                     or ((as_timestamp(now()) / 60) | int) % (repeat_min | int) == 0 }}
+            then: !input alert_action
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'tick' and alerts | length == 0 }}"
+        sequence:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: heating_alerts
