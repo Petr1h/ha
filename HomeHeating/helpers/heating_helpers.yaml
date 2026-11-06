@@ -1,14 +1,14 @@
-# Optional helpers for the "Topení - řízení kotle podle vah místností" blueprint.
+# Optional helpers for the "Heating - boiler control by room weights" blueprint.
 # Copy to config/packages/heating_helpers.yaml (packages must be enabled in configuration.yaml:
 #   homeassistant:
 #     packages: !include_dir_named packages
 # ) or create the same helpers in Settings > Devices & services > Helpers.
-# Then select them in the blueprint (Režim / preset, Topná sezóna, Textový helper, Číselný helper,
-# Dočasná ruční změna: stav a doba trvání).
+# Then select them in the blueprint (Mode / preset, Heating season, Status text helper, Demand number helper,
+# Temporary manual override: state helper and duration helper).
 
 input_select:
   heating_mode:
-    name: Topení - režim
+    name: Heating - mode
     options:
       - none
       - away
@@ -22,23 +22,23 @@ input_select:
 
 input_boolean:
   heating_season:
-    name: Topení - topná sezóna
+    name: Heating - season
     icon: mdi:sun-snowflake-variant
 
 input_text:
   heating_status:
-    name: Topení - stav
+    name: Heating - status
     max: 255
     icon: mdi:text-box-search
   # State of the temporary manual changes (turn of a TRV knob). Written only by the automation, max must be 255.
   heating_override_store:
-    name: Topení - stav dočasných změn
+    name: Heating - override state
     max: 255
     icon: mdi:database
 
 input_number:
   heating_override_duration:
-    name: Topení - doba dočasné změny (min)
+    name: Heating - override duration (min)
     min: 15
     max: 240
     step: 15
@@ -47,7 +47,7 @@ input_number:
     mode: box
     icon: mdi:timer-cog
   heating_demand:
-    name: Topení - vážená poptávka
+    name: Heating - weighted demand
     min: 0
     max: 100
     step: 0.01

@@ -1,147 +1,144 @@
-# Topení - řízení kotle podle vah místností
+# Heating - boiler control by room weights
 
-Jeden **automation blueprint** (`heating_control.yaml`), který se celý nastavuje v GUI. Kotel Viessmann BOHA-25 se spíná jedním relé (zap/vyp). Rozhodnutí vychází z **vážené poptávky**: každá místnost přispívá `váha × deficit`, kde `deficit = max(0, cílová − aktuální teplota)` v K.
+One **automation blueprint** (`heating_control.yaml`), configured entirely in the GUI. A boiler (for example a Viessmann) is switched by a single on/off relay. The decision is based on a **weighted demand**: every room contributes `weight × deficit`, where `deficit = max(0, target − current temperature)` in K.
 
-Cílová verze: HA 2026.10 (HA OS). Blueprint nevyžaduje YAML packages ani vygenerované soubory.
+Target version: Home Assistant 2026.10. The blueprint needs no YAML packages and no generated files.
 
-## Instalace
+## Installation
 
-1. Zkopírujte `blueprints/automation/petr1h/heating_control.yaml` do `config/blueprints/automation/petr1h/` (nebo přes Nastavení → Automatizace → Blueprinty → Importovat, pokud ho publikujete).
-2. Volitelné pomocné entity (režim, topná sezóna, textový stav, poptávka pro graf): `helpers/heating_helpers.yaml` do `config/packages/` (nebo stejné helpery vytvořte v GUI). Po přidání restart HA.
-3. **Nastavení → Automatizace a scény → Blueprinty → „Topení - řízení kotle podle vah místností“ → Vytvořit automatizaci.**
-4. Vyplňte: **Relé kotle** (jediný povinný údaj) a v sekci **Místnosti** u každé místnosti její **hlavice (TRV)**. Místnosti přidáte tlačítkem přidat pod seznamem a odeberete v menu položky (viz níže). Místnost bez hlavice se ignoruje. Vše ostatní je volitelné a lze doplnit později (upravit automatizaci).
-5. Zapněte `input_boolean.heating_season` (pokud ho používáte, je po vytvoření vypnutý, kotel je tedy vypnutý).
+1. Copy `blueprints/automation/petr1h/heating_control.yaml` to `config/blueprints/automation/petr1h/` (or use Settings → Automations & scenes → Blueprints → Import if you publish it).
+2. Optional helper entities (mode, heating season, status text, demand for a graph, temporary override): `helpers/heating_helpers.yaml` into `config/packages/` (or create the same helpers in the GUI). Restart HA after adding them.
+3. **Settings → Automations & scenes → Blueprints → "Heating - boiler control by room weights" → Create automation.**
+4. Fill in the **Boiler relay** (the only required value) and, in the **Rooms** section, the **TRVs** of every room. Add rooms with the add button below the list and remove them in the item menu (see below). A room without a TRV is ignored. Everything else is optional and can be added later by editing the automation.
+5. Turn on `input_boolean.heating_season` (if you use it, it is off after creation, so the boiler stays off).
 
-### Co je v blueprintu (sbalené sekce)
+### Sections of the blueprint (collapsed)
 
-| Sekce | Obsah |
+| Section | Contents |
 |---|---|
-| Kotel | relé, topná sezóna, režim / preset (none, away, comfort, eco, home, sleep, work from home, vacation), rozvrh |
-| Dočasná ruční změna | stavový helper, sledované hlavice, doba trvání (výchozí 60 min) |
-| Prahy, časy a ochrany | práh zapnutí/vypnutí, min. doba zapnutí/vypnutí, min. počet otevřených ventilů, protimrazový start, chování při selhání |
-| Cílové teploty podle presetu | comfort, eco, home, sleep, away, work from home, mráz (výchozí pro všechny místnosti) |
-| Poptávka a čidla | necitlivost, strop deficitu, limit zastaralých dat |
-| Ovládání hlaviček | tolerance cíle, vynucení režimu `heat`, posílání externí teploty do Z2M |
-| ViCare a upozornění | entita hořáku (read-only), prodleva, vlastní akce upozornění (např. `notify`) |
-| Výstupy a ladění | textový a číselný helper se stavem, logbook, podrobný log |
-| Místnosti | libovolný počet místností (přidat / odebrat): název, TRV (více kusů), externí čidlo, zdroj teploty, **váha**, posun cíle, korekce čidla, okenní kontakt, „topit vždy“, **vlastní teplota pro každý preset** |
+| Boiler | relay, heating season, mode / preset (none, away, comfort, eco, home, sleep, work from home, vacation), schedule |
+| Thresholds, timing and protections | on / off threshold, minimum on / off time, minimum number of open valves, frost-protection start, failure behavior |
+| Target temperatures per preset | comfort, eco, home, sleep, away, work from home, frost (defaults for all rooms) |
+| Demand and sensors | deadband, deficit cap, stale data timeout |
+| TRV control | setpoint tolerance, forcing `heat` mode, sending the external temperature to Z2M |
+| Temporary manual override | state helper, watched TRVs, duration (default 60 min) |
+| ViCare feedback and alerts | burner entity (read-only), delay, custom alert action (e.g. `notify`) |
+| Outputs and debugging | status text and demand number helpers, logbook, detailed log |
+| Rooms | any number of rooms (add / remove): name, TRVs (several allowed), external sensor, temperature source, **weight**, target shift, sensor correction, window contact, "always heat", **own temperature for every preset** |
 
-### Přidání a odebrání místností
+### Adding and removing rooms
 
-Blueprint nemůže mít vlastní tlačítko „AddRoom“ ani dynamicky vytvářet vstupy. Místnosti jsou proto jeden vstup typu `object` (seznam položek), jehož editor v GUI má tlačítko pro přidání položky a menu pro její odebrání. Počet místností není omezen. Změnu uložíte uložením automatizace.
+A blueprint cannot have its own "Add room" button or create inputs dynamically. The rooms are therefore one input of type `object` (a list of items); its GUI editor has a button to add an item and a menu to remove one. The number of rooms is not limited. Save the automation to apply the change. The list is empty after you create the automation.
 
-- Nepovinná pole, která u položky nevyplníte, mají výchozí hodnoty: zdroj = TRV, váha = 5, posun = 0, korekce = 0, topit vždy = vypnuto.
-- Seznam je předvyplněný vašimi 12 místnostmi (názvy a váhy jsou návrh) bez hlavic, takže nepoužité položky se ignorují. Nepotřebné smažte.
-- Pokud editor položek v GUI nepoužijete, lze seznam upravit v YAML automatizace (`use_blueprint → input → rooms`): `- {name: Obývák, trvs: [climate.obyvak], weight: 8}`.
-- **Upgrade ze starší verze (12 pevných slotů)** nelze přenést automaticky: vstupy `r1_*` … `r12_*` už neexistují a automatizaci je nutné znovu nastavit.
+- Optional fields you leave empty use defaults: source = TRV, weight = 5, shift = 0, correction = 0, always heat = off.
+- If you do not use the item editor, the list can be edited in the automation YAML (`use_blueprint → input → rooms`): `- {name: Living room, trvs: [climate.living_room], weight: 8}`.
 
-## Presety a teploty po místnostech
+## Presets and temperatures per room
 
-Preset se vybírá v `input_select` (pole **Režim / preset**, helper `heating_mode`). Rozpoznané volby (bez ohledu na velikost písmen, `_` a `-` se berou jako mezera): `none`, `away`, `comfort`, `eco`, `home`, `sleep` (i `night`), `work from home` (i `work_from_home`, `wfh`) a `vacation`. Jiná hodnota se bere jako `none`.
+The preset is selected in an `input_select` (the **Mode / preset** field, helper `heating_mode`). Recognised options (case-insensitive, `_` and `-` count as a space): `none`, `away`, `comfort`, `eco`, `home`, `sleep` (also `night`), `work from home` (also `work_from_home`, `wfh`) and `vacation`. Any other value counts as `none`.
 
-| Preset | Cíl místnosti |
+| Preset | Room target |
 |---|---|
-| none | rozvrh: zapnut = comfort, vypnut (nebo žádný rozvrh = comfort) = eco |
-| comfort / eco / home / work from home | příslušná teplota |
-| sleep | teplota sleep (u místnosti s „topit vždy“ comfort) |
-| away | teplota away |
-| vacation | mráz |
+| none | schedule: on = comfort, off = eco (no schedule = comfort) |
+| comfort / eco / home / work from home | the respective temperature |
+| sleep | sleep temperature (comfort for a room with "always heat") |
+| away | away temperature |
+| vacation | frost |
 
-Každý preset má **globální teplotu** (sekce Cílové teploty podle presetu) a u každé místnosti lze zadat **vlastní teplotu** (`t_away`, `t_comfort`, `t_eco`, `t_home`, `t_sleep`, `t_work`). Zadaná teplota místnosti se použije přesně tak, jak je (posun cíle se nepřičítá). Nezadaná = globální teplota + posun cíle. Otevřené okno a vacation vždy dávají mráz.
+Every preset has a **global temperature** (section Target temperatures per preset), and every room can have its **own temperature** (`t_away`, `t_comfort`, `t_eco`, `t_home`, `t_sleep`, `t_work`). A room temperature is used exactly as entered (the target shift is not added). If it is empty, the global temperature plus the target shift applies. An open window and vacation always give the frost temperature.
 
-Příklad: `work from home` s `t_work: 21` u pracovny a `t_work: 20` u obýváku nastaví pracovnu na 21 a obývák na 20, ostatní místnosti dostanou globální teplotu pro work from home.
+Example: `work from home` with `t_work: 21` for the office and `t_work: 20` for the living room sets the office to 21 and the living room to 20; the other rooms get the global work from home temperature.
 
-Změna oproti starší verzi: preset `home` má pevnou teplotu a rozvrh už neřídí (rozvrh platí jen pro `none`). `night_temp` se jmenuje v GUI „Teplota presetu sleep“. Helper `heating_mode` má nové volby, existující helper upravte ručně.
+The preset `home` has a fixed temperature and is not driven by the schedule (the schedule applies only to `none`).
 
-## Dočasná ruční změna (otočení hlavice)
+## Temporary manual override (knob turn)
 
-Když na hlavici otočíte kolečkem, nová teplota se **na dobu 60 min** (nastavitelné 15 až 240 min) zachová a rozvrh ani preset ji nepřepíšou. Funguje celé v Home Assistantu, vestavěný dočasný režim hlavice se nepoužívá. Pokud je pole **Textový helper pro stav dočasných změn** prázdné, funkce je vypnutá a ruční změna se přepíše jako dříve.
+When you turn the knob on a TRV, the new temperature is kept for **60 minutes** (configurable, 15 to 240 min) and neither the schedule nor the preset overwrites it. It is implemented entirely in Home Assistant; the TRV's built-in temporary mode is not used. If the field **Override state helper** is empty, the feature is off and a manual change is overwritten as before.
 
-### Zapnutí
+### Setup
 
-1. Vytvořte helpery z `helpers/heating_helpers.yaml`: `input_text.heating_override_store` (max 255) a volitelně `input_number.heating_override_duration`.
-2. V sekci **Dočasná ruční změna** vyberte stavový helper, **všechny hlavice**, u kterých se má změna sledovat (seznam se musí zadat znovu, spouštěče automatizace nemohou brát entity ze seznamu místností), a případně helper s dobou trvání.
+1. Create the helpers from `helpers/heating_helpers.yaml`: `input_text.heating_override_store` (max 255) and optionally `input_number.heating_override_duration`.
+2. In the section **Temporary manual override** select the state helper, **all TRVs** whose changes should be detected (the list has to be entered again, because automation triggers cannot take their entities from the room list) and optionally the duration helper.
 
-### Chování
+### Behavior
 
-| Situace | Výsledek |
+| Situation | Result |
 |---|---|
-| Otočení kolečka na jinou teplotu než cíl | Dočasná změna této hlavice s novou teplotou, platí celou dobu od otočení |
-| Další otočení během změny | Nová teplota a **celá doba znovu od začátku** |
-| Změna rozvrhu, presetu nebo posunu během změny | Hlavice drží ruční teplotu |
-| Uplynutí doby | Změna zanikne, **vypočítá se aktuální běžný cíl** a zapíše se do hlavice (starý cíl se neobnovuje). Probíhá při nejbližším běhu, tedy do 1 min |
-| Kolečko otočeno zpět na běžný cíl během změny | Změna se zruší |
-| Otevřené okno nebo preset vacation | Má přednost: cíl je mráz, změna se ignoruje (čas běží dál, po zavření okna pokračuje) |
-| Restart HA | Konec platnosti je uložen jako absolutní čas, změna pokračuje a časovač se nespouští znovu. Co už vypršelo, se hned vrátí pod běžné řízení |
-| Více hlavic | Každá hlavice má vlastní změnu. Poptávka místnosti počítá s průměrem cílů jejích hlavic |
+| Knob turned to a temperature other than the target | Temporary override of this TRV with the new temperature, valid for the full duration from the turn |
+| Another knob turn during an override | New temperature and the **full duration restarts** |
+| Schedule, preset or shift changes during an override | The TRV keeps the manual temperature |
+| Duration expires | The override ends, the **current normal target is evaluated** and written to the TRV (the old target is not restored). Happens at the next run, i.e. within 1 min |
+| Knob turned back to the normal target during an override | The override is cancelled |
+| Open window or vacation preset | Takes precedence: target is frost, the override is ignored (its time keeps running and it continues after the window closes) |
+| HA restart | The expiry is stored as an absolute time, the override continues and the timer is not started again. An override that has already expired returns to normal control immediately |
+| Several TRVs | Every TRV has its own override. The room demand uses the average of the targets of its TRVs |
 
-Tolerance „stejné jako běžný cíl“ je **Tolerance cílové teploty** (výchozí 0,4 °C), nastavte ji pod krok hlavice (0,5 °C), jinak se změna o 0,5 °C nepozná.
+The tolerance for "same as the normal target" is the **Setpoint tolerance** (default 0.4 °C). Keep it below the TRV step (0.5 °C), otherwise a 0.5 °C change is not detected.
 
-### Jak se pozná ruční otočení od zápisu z HA
+### How a knob turn is told apart from a write by HA
 
-Hlavice po každé změně cíle (i té, kterou zapsal HA) hlásí nový cíl a automatizace se na to spustí. Rozlišují se dva případy:
+After every target change (also one written by HA) the TRV reports the new target and the automation runs. Two cases are distinguished:
 
-1. **Před každým zápisem** si automatizace do stavového helperu poznamená „zapsal jsem do hlavice X teplotu T“. Když hlavice T nahlásí, je to potvrzení vlastního zápisu: záznam se spotřebuje a nic se neděje. Záznamů může být u hlavice víc (zápis 21, krátce poté 20, hlavice se probudí a hlásí postupně 21 a 20), takže opožděné hlášení nevadí. Záznam platí 10 min, pak se zapomene (hlavice mimo dosah).
-2. **Teplota, kterou HA nezapsal** a která se liší od běžného cíle (o víc než tolerance), je otočení kolečka. Samotné porovnání s rozvrhem by nestačilo, právě proto se zápisy evidují.
+1. **Before every write** the automation notes in the state helper "I wrote temperature T to TRV X". When the TRV then reports T, it is the confirmation of our own write: the note is consumed and nothing happens. A TRV can have several notes (write 21, shortly after write 20, the TRV wakes up and reports 21 and then 20), so a late report does no harm. A note is valid for 10 min and is then forgotten (TRV out of reach).
+2. **A temperature that HA did not write** and that differs from the normal target (by more than the tolerance) is a knob turn. Comparing with the schedule alone would not be enough, which is why the writes are recorded.
 
-Stavový helper má tvar `počet_hlavic|změny|zápisy`, kde změna je `index,teplota×10,konec platnosti v minutách epochy` a index je pořadí hlavice v seznamu sledovaných hlavic. Změní-li se **počet** sledovaných hlavic, uložený stav se zahodí. Při přeřazení hlavic při aktivní změně může být změna přiřazena jiné hlavici do vypršení, proto seznam za provozu raději jen doplňujte na konec.
+The state helper has the form `number_of_TRVs|overrides|writes`, where an override is `index,temperature×10,expiry in epoch minutes` and the index is the position of the TRV in the watched list. If the **number** of watched TRVs changes, the stored state is discarded. If TRVs are reordered while an override is active, the override may be assigned to another TRV until it expires, so only append to the list during operation.
 
-### Přidání další hlavice
+### Adding another TRV
 
-1. Přidejte hlavici do místnosti v sekci **Místnosti**.
-2. Přidejte ji i do seznamu **Hlavice sledované kvůli ruční změně** (nejlépe na konec).
-3. Uložte automatizaci. Protože se změnil počet sledovaných hlavic, uložený stav se jednorázově zahodí a případné běžící změny skončí.
+1. Add the TRV to its room in the **Rooms** section.
+2. Add it to the list **TRVs watched for manual changes** as well (preferably at the end).
+3. Save the automation. Because the number of watched TRVs changed, the stored state is discarded once and any running override ends.
 
-### Test scénáře (v HA, stopa automatizace)
+### Test scenarios (in HA, automation trace)
 
-1. Běžná změna rozvrhu: cíl se zapíše, hlavice ho potvrdí, v logbooku žádná „ruční změna“.
-2. Otočte kolečko: v logbooku „Ruční změna na climate.x“, `input_text` obsahuje záznam.
-3. Otočte znovu o 30 min později: konec platnosti se posune o celou dobu.
-4. Změňte rozvrh během změny: hlavice drží ruční teplotu.
-5. Po vypršení: do hlavice se zapíše aktuální běžný cíl.
-6. Restartujte HA během změny: změna pokračuje do původního konce.
-7. Zápis z HA a pozdní hlášení hlavice: nic se nevytvoří.
+1. Normal schedule change: the target is written, the TRV confirms it, no "manual change" in the logbook.
+2. Turn the knob: the logbook shows "Manual change on climate.x" and the `input_text` contains an entry.
+3. Turn it again 30 min later: the expiry moves by the full duration.
+4. Change the schedule during an override: the TRV keeps the manual temperature.
+5. After expiry: the current normal target is written to the TRV.
+6. Restart HA during an override: the override continues until its original end.
+7. A write from HA followed by a late TRV report: nothing is created.
 
-## Jak to rozhoduje
+## How it decides
 
-| Téma | Rozhodnutí |
+| Topic | Decision |
 |---|---|
-| Vzorec | `poptávka = Σ váha × min(deficit, strop)` přes místnosti s deficitem ≥ necitlivost. Jedna málo důležitá místnost sama kotel nezapne. |
-| Práh | Místnost s váhou `w` sama zapne kotel při deficitu `práh / w` (práh 6: váha 8 → 0,75 K, váha 2 → 3 K). Váha 0 = místnost kotel nikdy nespustí. |
-| Hystereze | Zapnout při poptávce ≥ 6, vypnout při ≤ 2 (výchozí hodnoty). |
-| Ochrana relé | Min. doba zapnutí a vypnutí 10 min a min. 1 otevřený ventil (`hvac_action = heating`). |
-| Mráz | Místnost pod protimrazovou teplotou vynutí start (s min. časy a otevřenými ventily). |
-| Selhání | Nedostupné relé nebo žádná místnost → relé „vypnout“ (nebo „ponechat“) + upozornění. |
-| Zdroj teploty | Vybraný zdroj (TRV / externí), při nedostupnosti nebo zastaralosti automaticky druhý. Místnost bez platné teploty se do poptávky nepočítá a hlásí se. |
-| Cíl | Podle presetu (viz níže). Vacation a otevřené okno: mráz. Cíl nikdy neklesne pod mráz. |
+| Formula | `demand = Σ weight × min(deficit, cap)` over rooms with a deficit ≥ deadband. One unimportant room alone does not start the boiler. |
+| Threshold | A room with weight `w` alone starts the boiler at a deficit of `threshold / w` (threshold 6: weight 8 → 0.75 K, weight 2 → 3 K). Weight 0 = the room never starts the boiler. |
+| Hysteresis | Switch on at demand ≥ 6, off at ≤ 2 (defaults). |
+| Relay protection | Minimum on and off time 10 min and at least 1 open valve (`hvac_action = heating`). |
+| Frost | A room below the frost temperature forces a start (with the minimum times and open valves). |
+| Failure | Unavailable relay or no room → relay "off" (or "keep") + alert. |
+| Temperature source | The selected source (TRV / external); if it is unavailable or stale, automatically the other one. A room without a valid temperature is not counted in the demand and is reported. |
+| Target | By preset (see above). Vacation and an open window: frost. The target never drops below frost. |
 
-Automatizace běží každou minutu, při změně relé a (při zapnuté dočasné změně) při každém hlášení cíle z hlavice; běhy se řadí do fronty (`mode: queued`). Příkazy do TRV se posílají jen při rozdílu cíle, ne periodicky.
+The automation runs every minute, on relay changes and (with the temporary override enabled) on every target report from a TRV; runs are queued (`mode: queued`). Commands are sent to the TRVs only when the target differs, not periodically.
 
-## Zdroj teploty a TRV-ZBT (ověřeno v dokumentaci Z2M)
+## Temperature source and TRV-ZBT (verified in the Z2M documentation)
 
-- Z2M vystavuje `external_temperature_input` (0–99,9 °C) a `temperature_sensor_select` (`local_temperature` / `remote_temperature` / `remote_source_offline`). Synchronizaci externí hodnoty musí zajistit HA. Blueprint ji posílá přes `mqtt.publish` (volba „Posílat externí teplotu do TRV“, výchozí vypnuto, interval 5 min, jen u místností s externím čidlem).
-- Název zařízení v Z2M (friendly name) se bere z názvu zařízení climate entity. Pokud je v HA přejmenované, MQTT příkazy nebudou fungovat.
-- TRV-ZBT nemá `preset`. Režim `auto` by spustil jeho vlastní týdenní program, proto blueprint výchozím nastavením vynutí `heat`.
-- Ruční změna teploty na hlavici se při zapnuté funkci Dočasná ruční změna zachová na nastavenou dobu, jinak se přepíše při dalším rozdílu s cílem.
-- Chování TRV při výpadku HA/MQTT (`remote_source_offline`) není v dokumentaci popsané, ověřte na jednom kuse.
+- Z2M exposes `external_temperature_input` (0–99.9 °C) and `temperature_sensor_select` (`local_temperature` / `remote_temperature` / `remote_source_offline`). The external value must be synchronised by HA. The blueprint sends it through `mqtt.publish` (option "Send external temperature to the TRVs", off by default, interval 5 min, only for rooms with an external sensor).
+- The Z2M device name (friendly name) is taken from the device name of the climate entity. If it is renamed in HA, the MQTT commands will not work.
+- The TRV-ZBT has no `preset`. The `auto` mode would start its own weekly program, so the blueprint forces `heat` by default.
+- A manual temperature change on a TRV is kept for the configured duration when the temporary override is enabled; otherwise it is overwritten at the next difference from the target.
+- The TRV behavior when HA/MQTT is down (`remote_source_offline`) is not described in the documentation; verify it on one unit.
 
 ## Dashboard
 
-`helpers/heating_dashboard.yaml` je jednoduchý dashboard (režim, sezóna, relé, stav a důvod, poptávka). Jednotlivé místnosti blueprint jako entity nevystavuje (blueprint nemůže vytvářet senzory). Podrobnosti po místnostech jsou ve stopě automatizace (Nastavení → Automatizace → Stopy) a po zapnutí „Podrobný log“ v logu HA.
+`helpers/heating_dashboard.yaml` is a simple dashboard (mode, season, relay, status and reason, demand). The blueprint does not expose individual rooms as entities (a blueprint cannot create sensors). Per-room details are in the automation trace (Settings → Automations → Traces) and, with "Detailed log every minute" on, in the HA log.
 
-## Test plán
+## Test plan
 
-1. Vytvořte automatizaci jen s relé a jednou místností. Spusťte ji ručně a otevřete **Stopy**: v `room_data` uvidíte teplotu, cíl, deficit a poptávku.
-2. Snižte cíl místnosti (posun cíle) nebo ji v testu zchlaďte. Místnost s nízkou váhou sama: `decision: off`, důvod „pod prahem zapnutí“. Vysoká váha: kotel se zapne a v logbooku je záznam s důvodem.
-3. Hned po sepnutí snižte poptávku: relé zůstane do uplynutí min. doby zapnutí.
-4. Odpojte relé: upozornění „Relé kotle není dostupné“ do prodlevy.
-5. Vyplňte entitu hořáku ViCare: při zapnutém relé a neběžícím hořáku déle než prodleva přijde upozornění.
+1. Create an automation with only the relay and one room. Run it manually and open **Traces**: `room_data` shows the temperature, target, deficit and demand.
+2. Lower the room target (target shift) or cool the room in a test. A low-weight room alone: `decision: off`, reason "below the on threshold". High weight: the boiler turns on and the logbook has an entry with the reason.
+3. Right after switching on, lower the demand: the relay stays on until the minimum on time passes.
+4. Disconnect the relay: the alert "Boiler relay unavailable" after the delay.
+5. Fill in the ViCare burner entity: with the relay on and the burner not running for longer than the delay, an alert is sent.
 
-## Co není ověřeno a otevřené body
+## Not verified and open points
 
-- **Blueprint nebyl načten ve skutečném HA.** To platí i pro editor seznamu místností (`object` selektor s `fields`, `multiple`, `label_field`): chování GUI je třeba ověřit při prvním otevření. Logika šablon byla ověřena offline (testovací skript byl odstraněn), schéma blueprintu proti schématu v HA jen ručně (hlavička, sekce, názvy vstupů). Při prvním vytvoření automatizace sledujte `Nastavení → Systém → Protokoly`.
-- **Fail-safe relé při výpadku HA**: zatím nerozhodnuto, závisí na nastavení relé (výchozí stav po ztrátě spojení/napájení, NO/NC).
-- Dočasná ruční změna: spouštěč `state` s prázdným seznamem hlavic (výchozí stav, funkce vypnutá) a s `attribute: temperature` jsem v HA neověřil. Pokud HA prázdný seznam odmítne, vyberte aspoň jednu hlavici. Chování probuzení baterie TRV-ZBT (zpoždění hlášení) je ošetřeno 10min záznamem zápisů, skutečné zpoždění ověřte v provozu.
-- Neznámé: entity ViCare (hořák), vlastní program kotle, které místnosti mají „topit vždy“, okenní kontakty, externí čidla.
-- Váhy se mění úpravou automatizace (ne za běhu z dashboardu). Ruční přepsání teploty s časovačem a detekce okna podle poklesu teploty nejsou implementované. Okenní kontakt podporován.
-- Blueprint se generuje ze `tools/heating_control.template.yaml` skriptem `tools/generate_blueprint.py` (skript jen vloží výchozí seznam místností). Při změnách upravujte šablonu a skript spusťte znovu.
+- **The blueprint has not been loaded in a real HA.** This also applies to the room list editor (`object` selector with `fields`, `multiple`, `label_field`): verify the GUI behavior when you first open it. The template logic was verified offline, the blueprint schema against HA's only by hand (header, sections, input names). When you first create the automation, watch `Settings → System → Logs`.
+- **Relay fail-safe when HA is down**: undecided, depends on the relay settings (default state after losing connection / power, NO/NC).
+- Temporary manual override: a `state` trigger with an empty TRV list (the default, feature off) and with `attribute: temperature` was not verified in HA. If HA rejects the empty list, select at least one TRV. The wake-up delay of battery TRV-ZBT reports is handled by the 10-minute record of writes; verify the real delay in operation.
+- Unknown: ViCare entities (burner), the boiler's own program, which rooms should "always heat", window contacts, external sensors.
+- Weights are changed by editing the automation (not at runtime from a dashboard). A manual temperature override with a timer is implemented only for TRV knob turns; window detection from a temperature drop is not implemented. A window contact is supported.
