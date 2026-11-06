@@ -13,16 +13,21 @@ cards:
       - entity: input_boolean.heating_season
         name: Topná sezóna
       # Replace with the entity ID of your boiler relay
-      - entity: switch.todo_boiler_relay
+      - entity: switch.spinac_kotel
         name: Relé kotle
       - entity: input_text.heating_status
         name: Stav a důvod
       - entity: input_number.heating_demand
         name: Vážená poptávka
+      - entity: input_number.heating_override_duration
+        name: Doba dočasné změny (min)
+      # Internal state of the temporary changes, read only
+      - entity: input_text.heating_override_store
+        name: Stav dočasných změn
   - type: history-graph
     title: Poptávka a relé
     hours_to_show: 24
     entities:
       - entity: input_number.heating_demand
       # Replace with the entity ID of your boiler relay
-      - entity: switch.todo_boiler_relay
+      - entity: switch.spinac_kotel

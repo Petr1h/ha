@@ -17,6 +17,7 @@ Cílová verze: HA 2026.10 (HA OS). Blueprint nevyžaduje YAML packages ani vyge
 | Sekce | Obsah |
 |---|---|
 | Kotel | relé, topná sezóna, režim / preset (none, away, comfort, eco, home, sleep, work from home, vacation), rozvrh |
+| Dočasná ruční změna | stavový helper, sledované hlavice, doba trvání (výchozí 60 min) |
 | Prahy, časy a ochrany | práh zapnutí/vypnutí, min. doba zapnutí/vypnutí, min. počet otevřených ventilů, protimrazový start, chování při selhání |
 | Cílové teploty podle presetu | comfort, eco, home, sleep, away, work from home, mráz (výchozí pro všechny místnosti) |
 | Poptávka a čidla | necitlivost, strop deficitu, limit zastaralých dat |
@@ -52,6 +53,55 @@ Příklad: `work from home` s `t_work: 21` u pracovny a `t_work: 20` u obýváku
 
 Změna oproti starší verzi: preset `home` má pevnou teplotu a rozvrh už neřídí (rozvrh platí jen pro `none`). `night_temp` se jmenuje v GUI „Teplota presetu sleep“. Helper `heating_mode` má nové volby, existující helper upravte ručně.
 
+## Dočasná ruční změna (otočení hlavice)
+
+Když na hlavici otočíte kolečkem, nová teplota se **na dobu 60 min** (nastavitelné 15 až 240 min) zachová a rozvrh ani preset ji nepřepíšou. Funguje celé v Home Assistantu, vestavěný dočasný režim hlavice se nepoužívá. Pokud je pole **Textový helper pro stav dočasných změn** prázdné, funkce je vypnutá a ruční změna se přepíše jako dříve.
+
+### Zapnutí
+
+1. Vytvořte helpery z `helpers/heating_helpers.yaml`: `input_text.heating_override_store` (max 255) a volitelně `input_number.heating_override_duration`.
+2. V sekci **Dočasná ruční změna** vyberte stavový helper, **všechny hlavice**, u kterých se má změna sledovat (seznam se musí zadat znovu, spouštěče automatizace nemohou brát entity ze seznamu místností), a případně helper s dobou trvání.
+
+### Chování
+
+| Situace | Výsledek |
+|---|---|
+| Otočení kolečka na jinou teplotu než cíl | Dočasná změna této hlavice s novou teplotou, platí celou dobu od otočení |
+| Další otočení během změny | Nová teplota a **celá doba znovu od začátku** |
+| Změna rozvrhu, presetu nebo posunu během změny | Hlavice drží ruční teplotu |
+| Uplynutí doby | Změna zanikne, **vypočítá se aktuální běžný cíl** a zapíše se do hlavice (starý cíl se neobnovuje). Probíhá při nejbližším běhu, tedy do 1 min |
+| Kolečko otočeno zpět na běžný cíl během změny | Změna se zruší |
+| Otevřené okno nebo preset vacation | Má přednost: cíl je mráz, změna se ignoruje (čas běží dál, po zavření okna pokračuje) |
+| Restart HA | Konec platnosti je uložen jako absolutní čas, změna pokračuje a časovač se nespouští znovu. Co už vypršelo, se hned vrátí pod běžné řízení |
+| Více hlavic | Každá hlavice má vlastní změnu. Poptávka místnosti počítá s průměrem cílů jejích hlavic |
+
+Tolerance „stejné jako běžný cíl“ je **Tolerance cílové teploty** (výchozí 0,4 °C), nastavte ji pod krok hlavice (0,5 °C), jinak se změna o 0,5 °C nepozná.
+
+### Jak se pozná ruční otočení od zápisu z HA
+
+Hlavice po každé změně cíle (i té, kterou zapsal HA) hlásí nový cíl a automatizace se na to spustí. Rozlišují se dva případy:
+
+1. **Před každým zápisem** si automatizace do stavového helperu poznamená „zapsal jsem do hlavice X teplotu T“. Když hlavice T nahlásí, je to potvrzení vlastního zápisu: záznam se spotřebuje a nic se neděje. Záznamů může být u hlavice víc (zápis 21, krátce poté 20, hlavice se probudí a hlásí postupně 21 a 20), takže opožděné hlášení nevadí. Záznam platí 10 min, pak se zapomene (hlavice mimo dosah).
+2. **Teplota, kterou HA nezapsal** a která se liší od běžného cíle (o víc než tolerance), je otočení kolečka. Samotné porovnání s rozvrhem by nestačilo, právě proto se zápisy evidují.
+
+Stavový helper má tvar `počet_hlavic|změny|zápisy`, kde změna je `index,teplota×10,konec platnosti v minutách epochy` a index je pořadí hlavice v seznamu sledovaných hlavic. Změní-li se **počet** sledovaných hlavic, uložený stav se zahodí. Při přeřazení hlavic při aktivní změně může být změna přiřazena jiné hlavici do vypršení, proto seznam za provozu raději jen doplňujte na konec.
+
+### Přidání další hlavice
+
+1. Přidejte hlavici do místnosti v sekci **Místnosti**.
+2. Přidejte ji i do seznamu **Hlavice sledované kvůli ruční změně** (nejlépe na konec).
+3. Uložte automatizaci. Protože se změnil počet sledovaných hlavic, uložený stav se jednorázově zahodí a případné běžící změny skončí.
+
+### Test scénáře (v HA, stopa automatizace)
+
+1. Běžná změna rozvrhu: cíl se zapíše, hlavice ho potvrdí, v logbooku žádná „ruční změna“.
+2. Otočte kolečko: v logbooku „Ruční změna na climate.x“, `input_text` obsahuje záznam.
+3. Otočte znovu o 30 min později: konec platnosti se posune o celou dobu.
+4. Změňte rozvrh během změny: hlavice drží ruční teplotu.
+5. Po vypršení: do hlavice se zapíše aktuální běžný cíl.
+6. Restartujte HA během změny: změna pokračuje do původního konce.
+7. Zápis z HA a pozdní hlášení hlavice: nic se nevytvoří.
+
 ## Jak to rozhoduje
 
 | Téma | Rozhodnutí |
@@ -65,14 +115,14 @@ Změna oproti starší verzi: preset `home` má pevnou teplotu a rozvrh už neř
 | Zdroj teploty | Vybraný zdroj (TRV / externí), při nedostupnosti nebo zastaralosti automaticky druhý. Místnost bez platné teploty se do poptávky nepočítá a hlásí se. |
 | Cíl | Podle presetu (viz níže). Vacation a otevřené okno: mráz. Cíl nikdy neklesne pod mráz. |
 
-Automatizace běží každou minutu a při změně relé. Příkazy do TRV se posílají jen při rozdílu cíle, ne periodicky.
+Automatizace běží každou minutu, při změně relé a (při zapnuté dočasné změně) při každém hlášení cíle z hlavice; běhy se řadí do fronty (`mode: queued`). Příkazy do TRV se posílají jen při rozdílu cíle, ne periodicky.
 
 ## Zdroj teploty a TRV-ZBT (ověřeno v dokumentaci Z2M)
 
 - Z2M vystavuje `external_temperature_input` (0–99,9 °C) a `temperature_sensor_select` (`local_temperature` / `remote_temperature` / `remote_source_offline`). Synchronizaci externí hodnoty musí zajistit HA. Blueprint ji posílá přes `mqtt.publish` (volba „Posílat externí teplotu do TRV“, výchozí vypnuto, interval 5 min, jen u místností s externím čidlem).
 - Název zařízení v Z2M (friendly name) se bere z názvu zařízení climate entity. Pokud je v HA přejmenované, MQTT příkazy nebudou fungovat.
 - TRV-ZBT nemá `preset`. Režim `auto` by spustil jeho vlastní týdenní program, proto blueprint výchozím nastavením vynutí `heat`.
-- Ruční změna teploty na hlavici se přepíše při dalším rozdílu s cílem. Dočasně změňte cíl přes posun cíle nebo režim.
+- Ruční změna teploty na hlavici se při zapnuté funkci Dočasná ruční změna zachová na nastavenou dobu, jinak se přepíše při dalším rozdílu s cílem.
 - Chování TRV při výpadku HA/MQTT (`remote_source_offline`) není v dokumentaci popsané, ověřte na jednom kuse.
 
 ## Dashboard
@@ -91,6 +141,7 @@ Automatizace běží každou minutu a při změně relé. Příkazy do TRV se po
 
 - **Blueprint nebyl načten ve skutečném HA.** To platí i pro editor seznamu místností (`object` selektor s `fields`, `multiple`, `label_field`): chování GUI je třeba ověřit při prvním otevření. Logika šablon byla ověřena offline (testovací skript byl odstraněn), schéma blueprintu proti schématu v HA jen ručně (hlavička, sekce, názvy vstupů). Při prvním vytvoření automatizace sledujte `Nastavení → Systém → Protokoly`.
 - **Fail-safe relé při výpadku HA**: zatím nerozhodnuto, závisí na nastavení relé (výchozí stav po ztrátě spojení/napájení, NO/NC).
+- Dočasná ruční změna: spouštěč `state` s prázdným seznamem hlavic (výchozí stav, funkce vypnutá) a s `attribute: temperature` jsem v HA neověřil. Pokud HA prázdný seznam odmítne, vyberte aspoň jednu hlavici. Chování probuzení baterie TRV-ZBT (zpoždění hlášení) je ošetřeno 10min záznamem zápisů, skutečné zpoždění ověřte v provozu.
 - Neznámé: entity ViCare (hořák), vlastní program kotle, které místnosti mají „topit vždy“, okenní kontakty, externí čidla.
 - Váhy se mění úpravou automatizace (ne za běhu z dashboardu). Ruční přepsání teploty s časovačem a detekce okna podle poklesu teploty nejsou implementované. Okenní kontakt podporován.
 - Blueprint se generuje ze `tools/heating_control.template.yaml` skriptem `tools/generate_blueprint.py` (skript jen vloží výchozí seznam místností). Při změnách upravujte šablonu a skript spusťte znovu.

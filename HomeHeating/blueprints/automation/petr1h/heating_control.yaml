@@ -302,6 +302,55 @@ blueprint:
                   value: "15"
                 - label: 30 min
                   value: "30"
+    override_section:
+      name: Dočasná ruční změna (otočení hlavice)
+      icon: mdi:knob
+      collapsed: true
+      input:
+        override_store:
+          name: Textový helper pro stav dočasných změn (volitelné)
+          description: >-
+            An input_text with max length 255 (helper `heating_override_store`). Enables the feature: when a TRV
+            knob is turned, the new temperature is kept for the duration below instead of being overwritten by the
+            schedule. The helper stores only the active overrides and the temperatures written by this automation
+            (to tell its own writes from knob turns), so it survives a Home Assistant restart. Empty = feature off,
+            a manual change is overwritten at the next run. Do not edit this helper by hand.
+          default: ""
+          selector:
+            entity:
+              domain: input_text
+        override_trvs:
+          name: Hlavice sledované kvůli ruční změně
+          description: >-
+            The TRVs whose knob turns are detected (list the TRVs of all rooms that should support it). Home
+            Assistant triggers cannot take their entities from the room list, so they have to be listed here again.
+            Each TRV has its own independent override. Adding a TRV = add it here and in the room list.
+          default: []
+          selector:
+            entity:
+              domain: climate
+              multiple: true
+        override_minutes:
+          name: Doba trvání dočasné změny (min)
+          description: Used when no duration helper is selected below.
+          default: 60
+          selector:
+            number:
+              min: 15
+              max: 240
+              step: 15
+              unit_of_measurement: min
+              mode: box
+        override_duration:
+          name: Helper s dobou trvání (volitelné)
+          description: >-
+            An input_number with the duration in minutes (helper `heating_override_duration`). When set, it replaces
+            the value above, so the duration can be changed without editing the automation. It is read when the
+            override is created or restarted.
+          default: ""
+          selector:
+            entity:
+              domain: input_number
     feedback_section:
       name: Zpětná vazba z ViCare a upozornění
       icon: mdi:bell-alert
@@ -551,7 +600,10 @@ blueprint:
                       step: 0.5
                       unit_of_measurement: °C
                       mode: box
-mode: single
+# queued: a knob turn must not be dropped because the minute run is just running; the runs also read and write the
+# override store, so they must never overlap
+mode: queued
+max: 10
 max_exceeded: silent
 
 # Static values usable inside trigger templates
@@ -570,6 +622,11 @@ triggers:
   - trigger: homeassistant
     event: start
     id: start
+  # A TRV reported a new target temperature: its own echo of a Home Assistant write or a turn of the knob
+  - trigger: state
+    entity_id: !input override_trvs
+    attribute: temperature
+    id: knob
   # Fires once when a problem appears and persists for the delay (first alert without waiting for the repeat slot)
   - trigger: template
     id: alert
@@ -621,6 +678,10 @@ variables:
   debug_log: !input debug_log
   status_id: !input status_text
   demand_id: !input demand_number
+  store_id: !input override_store
+  watch: !input override_trvs
+  ov_minutes: !input override_minutes
+  ov_dur_id: !input override_duration
   rooms_in: !input rooms
   # Room list with defaults for the optional fields of every item
   rooms: >-
@@ -644,8 +705,40 @@ variables:
 actions:
   - variables:
       # ------------------------------------------------------------------ rooms
-      # One dict per configured room: effective temperature, target, deficit and weighted demand.
-      room_data: >-
+      # ------------------------------------------------------------ override store
+      # Overrides (temporary manual targets) and pending writes of this automation live in one input_text:
+      #   "<number of watched TRVs>|<override>;<override>;...|<write>;<write>;..."
+      #   override = "<TRV index>,<target in 0.1 °C>,<expires, epoch minutes>"
+      #   write    = "<TRV index>,<target in 0.1 °C>,<written at, epoch minutes>"
+      # The TRV index is the position in the watched TRV list. The store is dropped when that list changes in length.
+      ov_enabled: "{{ store_id != '' and (watch | length) > 0 }}"
+      now_min: "{{ (as_timestamp(now()) / 60) | int }}"
+      ov_dur: >-
+        {{ [(((states(ov_dur_id) | float(ov_minutes)) if ov_dur_id != '' else ov_minutes) | float(60)) | round(0), 1] | max | int }}
+      store_state: "{{ states(store_id) if store_id != '' else '' }}"
+      store_old: >-
+        {%- set raw = store_state if store_state not in ['unknown', 'unavailable'] else '' -%}
+        {%- set p = raw.split('|') -%}
+        {%- set ns = namespace(ov=[], wr=[]) -%}
+        {%- if ov_enabled and p | length == 3 and (p[0] | int(-1)) == (watch | length) -%}
+          {%- for e in p[1].split(';') if e -%}
+            {%- set f = e.split(',') -%}
+            {%- set ns.ov = ns.ov + [{'i': f[0] | int, 't': f[1] | int, 'u': f[2] | int}] -%}
+          {%- endfor -%}
+          {%- for e in p[2].split(';') if e -%}
+            {%- set f = e.split(',') -%}
+            {%- set ns.wr = ns.wr + [{'i': f[0] | int, 't': f[1] | int, 'a': f[2] | int}] -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {{ {'ov': ns.ov, 'wr': ns.wr} }}
+      # Expired overrides simply disappear here: the normal target is then evaluated and written below (the old
+      # temperature is never restored). Pending writes are forgotten after 10 minutes (sleepy battery TRV).
+      ov_live: "{{ store_old.ov | selectattr('u', '>', now_min) | list }}"
+      wr_live: "{{ store_old.wr | selectattr('a', '>', now_min - 10) | list }}"
+      # ------------------------------------------------------------------ rooms
+      # One dict per configured room: effective temperature and NORMAL target (no override). 'suppress' = a
+      # higher-priority condition (open window, vacation) that ignores overrides.
+      room_base: >-
         {%- set ns = namespace(out=[]) -%}
         {%- set m = (states(mode_id) if mode_id else 'none') | lower | replace('_', ' ') | replace('-', ' ') | trim -%}
         {%- set mode = 'vacation' if m.startswith('vac') else ('away' if m.startswith('away') else ('sleep' if m in ['sleep', 'night'] else ('work' if m.startswith('work') or m == 'wfh' else (m if m in ['comfort', 'eco', 'home'] else 'none')))) -%}
@@ -689,16 +782,117 @@ actions:
                          'home': r.t_home, 'work': r.t_work}[reason] if reason not in ['window', 'vacation'] else none -%}
           {%- set adj = r.adjust if reason not in ['window', 'vacation'] else 0 -%}
           {%- set target = [(own | float) if is_number(own) else base + adj, frost_t] | max -%}
-          {%- set deficit = ([target - eff, 0] | max) if eff is not none else 0 -%}
-          {%- set used_deficit = [(deficit if deficit >= deadband else 0), max_deficit] | min -%}
           {%- set ns.out = ns.out + [{
                 'name': r.name, 'trvs': r.trvs, 'has_ext': r.ext != '', 'valid': eff is not none,
                 'eff': eff, 'used': used, 'selected': r.source, 'fallback': used != 'none' and used != r.source,
-                'target': target, 'reason': reason, 'weight': r.weight, 'deficit': deficit,
-                'demand': ((r.weight * used_deficit) | round(2)), 'open': t.open, 'bad': bad,
-                'frost': eff is not none and eff < frost_t}] -%}
+                'normal': target, 'reason': reason, 'weight': r.weight, 'open': t.open, 'bad': bad,
+                'suppress': reason in ['window', 'vacation']}] -%}
         {%- endfor -%}
         {{ ns.out }}
+      # ------------------------------------------------------- manual change (knob)
+      # Classifies the TRV report that triggered this run (only for trigger "knob"):
+      #   echo   = the TRV confirms a temperature this automation wrote -> ignored, the pending write is consumed
+      #   set    = a temperature nobody here wrote and different from the normal target -> start / restart override
+      #   cancel = the knob was turned back to the normal target while an override runs -> end the override
+      #   none   = anything else (same value as the running override, change within the tolerance of the normal
+      #            target, window / vacation precedence, unavailable TRV, TRV not in the room list)
+      knob_ev: >-
+        {%- set res = namespace(kind='none', i=-1, t=0) -%}
+        {%- if ov_enabled and trigger.id == 'knob' -%}
+          {%- set eid = trigger.entity_id -%}
+          {%- set i = watch.index(eid) if eid in watch else -1 -%}
+          {%- set s = trigger.to_state.attributes.get('temperature') if trigger.to_state else none -%}
+          {%- set s_old = trigger.from_state.attributes.get('temperature') if trigger.from_state else none -%}
+          {%- set rm = namespace(b=none) -%}
+          {%- for b in room_base if eid in b.trvs -%}{%- set rm.b = b -%}{%- endfor -%}
+          {%- if i >= 0 and rm.b is not none and is_number(s) and is_number(s_old) -%}
+            {%- set s10 = ((s | float) * 10) | round | int -%}
+            {%- set n10 = (rm.b.normal * 10) | round | int -%}
+            {%- set echo = wr_live | selectattr('i', 'eq', i) | selectattr('t', 'eq', s10) | list | count > 0 -%}
+            {%- set cur = ov_live | selectattr('i', 'eq', i) | first | default(none) -%}
+            {%- set at_normal = ((s10 - n10) | abs) < (sp_deadband | float(0.4)) * 10 -%}
+            {%- if rm.b.suppress -%}
+            {%- elif echo -%}{%- set res.kind = 'echo' -%}{%- set res.i = i -%}{%- set res.t = s10 -%}
+            {%- elif cur is not none and cur.t == s10 -%}
+            {%- elif at_normal -%}
+              {%- if cur is not none -%}{%- set res.kind = 'cancel' -%}{%- set res.i = i -%}{%- endif -%}
+            {%- else -%}{%- set res.kind = 'set' -%}{%- set res.i = i -%}{%- set res.t = s10 -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endif -%}
+        {{ {'kind': res.kind, 'i': res.i, 't': res.t} }}
+      # Overrides after this run: a new / restarted override gets a full new duration, expiry is never extended otherwise.
+      ov_new: >-
+        {%- set rest = ov_live | rejectattr('i', 'eq', knob_ev.i) | list -%}
+        {{ (rest + [{'i': knob_ev.i, 't': knob_ev.t, 'u': now_min + ov_dur}]) if knob_ev.kind == 'set'
+           else (rest if knob_ev.kind == 'cancel' else ov_live) }}
+      # Per room: the target of every TRV (its override while one runs, else the normal target), the room target
+      # used for the demand (average of its TRVs), deficit and weighted demand.
+      room_data: >-
+        {%- set ns = namespace(out=[]) -%}
+        {%- for b in room_base -%}
+          {%- set tt = namespace(l=[]) -%}
+          {%- for e in b.trvs -%}
+            {%- set o = ov_new | selectattr('i', 'eq', (watch.index(e) if e in watch else -1)) | first | default(none) -%}
+            {%- set use_o = o is not none and not b.suppress -%}
+            {%- set tt.l = tt.l + [{'e': e, 't': ((o.t / 10) if use_o else b.normal), 'ov': use_o}] -%}
+          {%- endfor -%}
+          {%- set target = (tt.l | map(attribute='t') | list | average) | round(2) -%}
+          {%- set deficit = ([target - b.eff, 0] | max) if b.eff is not none else 0 -%}
+          {%- set used_deficit = [(deficit if deficit >= deadband else 0), max_deficit] | min -%}
+          {%- set ns.out = ns.out + [{
+                'name': b.name, 'trvs': b.trvs, 'trv_t': tt.l, 'has_ext': b.has_ext, 'valid': b.valid,
+                'eff': b.eff, 'used': b.used, 'selected': b.selected, 'fallback': b.fallback,
+                'target': target, 'normal': b.normal, 'reason': b.reason, 'weight': b.weight, 'deficit': deficit,
+                'demand': ((b.weight * used_deficit) | round(2)), 'open': b.open, 'bad': b.bad,
+                'frost': b.eff is not none and b.eff < frost_t}] -%}
+        {%- endfor -%}
+        {{ ns.out }}
+      # What to send to the TRVs this run: target, whether the mode must be corrected, whether the target differs.
+      trv_plan: >-
+        {%- set ns = namespace(out=[]) -%}
+        {%- for x in room_data -%}{%- for y in x.trv_t -%}
+          {%- if states(y.e) not in ['unavailable', 'unknown'] -%}
+            {%- set ns.out = ns.out + [{'e': y.e, 't': y.t,
+                  'mode': enforce_heat and states(y.e) != 'heat',
+                  'write': (((state_attr(y.e, 'temperature') | float(-100)) - y.t) | abs) >= (sp_deadband | float(0.4))}] -%}
+          {%- endif -%}
+        {%- endfor -%}{%- endfor -%}
+        {{ ns.out }}
+      # Pending writes: the confirmed one (echo) is consumed, every temperature written now is remembered, so that
+      # the TRV report of our own write is never taken for a knob turn (even when it arrives late or in a series).
+      wr_new: >-
+        {%- set ns = namespace(kept=[], fresh=[], skipped=false) -%}
+        {%- for w in wr_live -%}
+          {%- if knob_ev.kind == 'echo' and not ns.skipped and w.i == knob_ev.i and w.t == knob_ev.t -%}
+            {%- set ns.skipped = true -%}
+          {%- else -%}{%- set ns.kept = ns.kept + [w] -%}{%- endif -%}
+        {%- endfor -%}
+        {%- if ov_enabled -%}
+          {%- for p in trv_plan if p.write and p.e in watch -%}
+            {%- set ns.fresh = ns.fresh + [{'i': watch.index(p.e), 't': (p.t * 10) | round | int, 'a': now_min}] -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {%- set keep = namespace(out=[]) -%}
+        {%- for w in ns.kept -%}
+          {%- if ns.fresh | selectattr('i', 'eq', w.i) | selectattr('t', 'eq', w.t) | list | count == 0 -%}
+            {%- set keep.out = keep.out + [w] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ keep.out + ns.fresh }}
+      # The new store text. Overrides first; the oldest pending writes are dropped when 255 characters do not fit.
+      store_new: >-
+        {%- if not ov_enabled -%}{{ store_state }}
+        {%- else -%}
+          {%- set ns = namespace(ov='', wr='') -%}
+          {%- for o in ov_new -%}{%- set ns.ov = ns.ov ~ o.i ~ ',' ~ o.t ~ ',' ~ o.u ~ ';' -%}{%- endfor -%}
+          {%- set head = (watch | length) ~ '|' ~ ns.ov ~ '|' -%}
+          {%- for w in wr_new | reverse -%}
+            {%- set item = w.i ~ ',' ~ w.t ~ ',' ~ w.a ~ ';' -%}
+            {%- if (head | length) + (ns.wr | length) + (item | length) <= 255 -%}{%- set ns.wr = ns.wr ~ item -%}{%- endif -%}
+          {%- endfor -%}
+          {{ head ~ ns.wr }}
+        {%- endif -%}
       # --------------------------------------------------------------- aggregate
       demand: >-
         {%- set ns = namespace(d=0) -%}
@@ -805,38 +999,53 @@ actions:
                   message: "Kotel vypnut: {{ reason }}"
                   entity_id: !input relay
 
-  # ------------------------------------------------ 2) target temperature in TRVs
+  # ------------------------------------------------ 2) temporary overrides and TRV targets
+  # The override store is saved BEFORE any TRV is written, so the report of our own write always finds its entry.
+  - if:
+      - condition: template
+        value_template: "{{ ov_enabled and store_new != store_state }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ store_id }}"
+        data:
+          value: "{{ store_new }}"
+  - if:
+      - condition: template
+        value_template: "{{ log_decisions and knob_ev.kind in ['set', 'cancel'] }}"
+    then:
+      - action: logbook.log
+        data:
+          name: Topení
+          message: >-
+            {%- if knob_ev.kind == 'set' -%}
+              Ruční změna na {{ trigger.entity_id }}: {{ knob_ev.t / 10 }} °C, platí {{ ov_dur }} min
+            {%- else -%}
+              Ruční změna na {{ trigger.entity_id }} zpět na běžnou teplotu, dočasná změna zrušena
+            {%- endif -%}
+          entity_id: "{{ trigger.entity_id }}"
+  # Target of every TRV: its running override, else the normal target of its room.
   - repeat:
-      for_each: "{{ room_data }}"
+      for_each: "{{ trv_plan }}"
       sequence:
-        - variables:
-            room: "{{ repeat.item }}"
-        - repeat:
-            for_each: "{{ room.trvs }}"
-            sequence:
-              - if:
-                  - condition: template
-                    value_template: "{{ states(repeat.item) not in ['unavailable', 'unknown'] }}"
-                then:
-                  - if:
-                      - condition: template
-                        value_template: "{{ enforce_heat and states(repeat.item) != 'heat' }}"
-                    then:
-                      - action: climate.set_hvac_mode
-                        target:
-                          entity_id: "{{ repeat.item }}"
-                        data:
-                          hvac_mode: heat
-                  - if:
-                      - condition: template
-                        value_template: >-
-                          {{ ((state_attr(repeat.item, 'temperature') | float(-100)) - room.target) | abs >= (sp_deadband | float(0.4)) }}
-                    then:
-                      - action: climate.set_temperature
-                        target:
-                          entity_id: "{{ repeat.item }}"
-                        data:
-                          temperature: "{{ room.target }}"
+        - if:
+            - condition: template
+              value_template: "{{ repeat.item.mode }}"
+          then:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: "{{ repeat.item.e }}"
+              data:
+                hvac_mode: heat
+        - if:
+            - condition: template
+              value_template: "{{ repeat.item.write }}"
+          then:
+            - action: climate.set_temperature
+              target:
+                entity_id: "{{ repeat.item.e }}"
+              data:
+                temperature: "{{ repeat.item.t }}"
 
   # ---------------------- 3) external temperature into the TRVs (Zigbee2MQTT)
   - if:
@@ -903,7 +1112,7 @@ actions:
           level: info
           logger: heating_control
           message: >-
-            {{ decision }} ({{ reason }}) demand={{ demand }} valves_open={{ valves_open }} |
+            {{ decision }} ({{ reason }}) demand={{ demand }} valves_open={{ valves_open }} overrides={{ ov_new | length }} |
             {% for x in room_data %}{{ x.name }}: {{ x.eff }}/{{ x.target }} ({{ x.used }}) w={{ x.weight }} d={{ x.deficit }} demand={{ x.demand }} open={{ x.open }}; {% endfor %}
 
   # ------------------------------------------------------------------ 5) alerts

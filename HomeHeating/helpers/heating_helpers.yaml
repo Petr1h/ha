@@ -3,7 +3,8 @@
 #   homeassistant:
 #     packages: !include_dir_named packages
 # ) or create the same helpers in Settings > Devices & services > Helpers.
-# Then select them in the blueprint (Režim / preset, Topná sezóna, Textový helper, Číselný helper).
+# Then select them in the blueprint (Režim / preset, Topná sezóna, Textový helper, Číselný helper,
+# Dočasná ruční změna: stav a doba trvání).
 
 input_select:
   heating_mode:
@@ -29,8 +30,22 @@ input_text:
     name: Topení - stav
     max: 255
     icon: mdi:text-box-search
+  # State of the temporary manual changes (turn of a TRV knob). Written only by the automation, max must be 255.
+  heating_override_store:
+    name: Topení - stav dočasných změn
+    max: 255
+    icon: mdi:database
 
 input_number:
+  heating_override_duration:
+    name: Topení - doba dočasné změny (min)
+    min: 15
+    max: 240
+    step: 15
+    initial: 60
+    unit_of_measurement: min
+    mode: box
+    icon: mdi:timer-cog
   heating_demand:
     name: Topení - vážená poptávka
     min: 0
